@@ -12,7 +12,7 @@ import os
 import re
 import shlex
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -47,7 +47,8 @@ class QualificationResult:
     checkout_currency: str
     proxy_configured: bool
     evidence: str
-    available_channels: list[str]
+    available_channels: list[str] = field(default_factory=list)
+    channel_details: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +64,7 @@ class QualificationResult:
             "proxy_configured": self.proxy_configured,
             "evidence": self.evidence,
             "available_channels": self.available_channels,
+            "channel_details": self.channel_details,
             "gcash_available": self.qualified,
         }
 
@@ -242,6 +244,21 @@ def _channel_name(method: Any) -> str:
     return str(method.get("id") or "").strip()
 
 
+def _channel_details(methods: Any) -> list[dict[str, Any]]:
+    if not isinstance(methods, list):
+        return []
+    details = []
+    for method in methods:
+        if isinstance(method, dict):
+            method_id = str(method.get("id") or "")
+            name = "gcash" if method_id in KNOWN_GCASH_METHOD_IDS else _channel_name(method)
+            if name:
+                details.append({"name": name, "id": method_id, "raw_type": method.get("type") or ""})
+        elif isinstance(method, str) and method.strip():
+            details.append({"name": method.strip(), "id": method.strip(), "raw_type": ""})
+    return details
+
+
 def _available_channels(methods: Any) -> list[str]:
     if not isinstance(methods, list):
         return []
@@ -317,9 +334,10 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                 methods = state.get("custom_payment_methods")
                 method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             channels = _available_channels(state.get("custom_payment_methods"))
+            details = _channel_details(state.get("custom_payment_methods"))
             available = bool(method_id) if target_channel == "gcash" else _channel_available(state.get("custom_payment_methods"), target_channel)
             country = str(preset.get("country") or "PH").upper()
-            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels)
+            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details)
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):

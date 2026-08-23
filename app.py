@@ -110,6 +110,49 @@ def health():
     return jsonify({"ok": True, "service": "gcash-qualification-gui", "workers": WORKERS})
 
 
+BUILTIN_PRESETS = {
+    "gcash": {"channel": "gcash", "country": "PH", "currency": "PHP", "plan": "plus"},
+    "card": {"channel": "card", "country": "PH", "currency": "PHP", "plan": "plus"},
+    "paypal_uk": {"channel": "paypal", "country": "GB", "currency": "GBP", "plan": "plus"},
+    "ideal_nl": {"channel": "ideal", "country": "NL", "currency": "EUR", "plan": "plus"},
+    "momo_vn": {"channel": "momo", "country": "VN", "currency": "VND", "plan": "plus"},
+}
+
+
+def resolve_preset(payload: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    custom = payload.get("presets") if isinstance(payload.get("presets"), dict) else {}
+    name = str(payload.get("preset") or "gcash").strip()
+    preset = dict(BUILTIN_PRESETS.get(name, {}))
+    if isinstance(custom.get(name), dict):
+        preset.update(custom[name])
+    if not preset:
+        preset = {"channel": str(payload.get("target_channel") or "gcash"), "country": "PH", "currency": "PHP", "plan": "plus"}
+    return name, preset
+
+
+@app.get("/api/presets")
+def list_presets():
+    return jsonify({"ok": True, "presets": BUILTIN_PRESETS})
+
+
+@app.post("/api/gcash/check")
+def check_one():
+    payload = request.get_json(silent=True) or {}
+    token = payload.get("token") or payload.get("access_token") or ""
+    proxy = payload.get("proxy") or ""
+    if not token or not proxy:
+        return jsonify({"ok": False, "error": "token 和 proxy 均为必填"}), 400
+    name, preset = resolve_preset(payload)
+    try:
+        result = check_gcash(token, proxy, target_channel=str(payload.get("target_channel") or preset.get("channel") or "gcash"), preset=preset)
+    except GCashCheckerError as exc:
+        return jsonify({"ok": False, "preset": name, "error": str(exc)}), 400
+    except Exception as exc:
+        app.logger.exception("single channel check failed")
+        return jsonify({"ok": False, "preset": name, "error": f"{type(exc).__name__}: {exc}"}), 502
+    return jsonify({"ok": True, "preset": name, **result.as_dict()})
+
+
 @app.post("/api/gcash/batch")
 def create_batch():
     payload = request.get_json(silent=True) or {}
@@ -126,18 +169,7 @@ def create_batch():
     with jobs_lock:
         jobs[job_id] = job
     with_promo = bool(payload.get("with_promo", False))
-    presets = payload.get("presets") if isinstance(payload.get("presets"), dict) else {}
-    builtin = {
-        "gcash": {"channel": "gcash", "country": "PH", "currency": "PHP", "plan": "plus"},
-        "card": {"channel": "card", "country": "PH", "currency": "PHP", "plan": "plus"},
-        "paypal_uk": {"channel": "paypal", "country": "GB", "currency": "GBP", "plan": "plus"},
-        "ideal_nl": {"channel": "ideal", "country": "NL", "currency": "EUR", "plan": "plus"},
-        "momo_vn": {"channel": "momo", "country": "VN", "currency": "VND", "plan": "plus"},
-    }
-    preset_name = str(payload.get("preset") or "gcash").strip()
-    preset = dict(builtin.get(preset_name, {}))
-    if isinstance(presets.get(preset_name), dict):
-        preset.update(presets[preset_name])
+    preset_name, preset = resolve_preset(payload)
     target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
     for index, item in enumerate(items):
         executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset)

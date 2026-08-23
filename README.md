@@ -27,6 +27,33 @@ npm install
 
 浏览器打开 `http://127.0.0.1:18097/`。
 
+## API
+
+列出内置预设：
+
+```http
+GET /api/presets
+```
+
+单账号检测并返回渠道 ID：
+
+```http
+POST /api/gcash/check
+Content-Type: application/json
+```
+
+```json
+{
+  "token": "<JWT 或整行账号>",
+  "proxy": "host:port:user:password",
+  "preset": "paypal_uk"
+}
+```
+
+支持预设：`gcash`、`card`、`paypal_uk`、`ideal_nl`、`momo_vn`。响应中的 `channel_details` 会包含 OpenAI Checkout 返回的渠道名称、ID 和原始类型。
+
+批量检测仍使用 `POST /api/gcash/batch`，任务状态使用 `GET /api/gcash/batch/<job_id>`。
+
 ## 代理示例
 
 ```text
