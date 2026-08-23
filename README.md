@@ -29,7 +29,16 @@ npm install
 
 ## 自部署与访客模式
 
-默认是自部署模式，不需要 CDK，适合管理员直接运行。访客模式需要有效 CDK，并按批次账号数量扣减额度；访客结果不会返回邮箱和 Access Token。
+默认是自部署模式，不需要 CDK，适合管理员直接运行。管理员可在 GUI 后台登录后切换全局模式。访客模式需要有效 CDK，并按批次账号数量扣减额度；访客结果不会返回邮箱和 Access Token。
+
+设置管理员密码：
+
+```bash
+export GCASH_ADMIN_PASSWORD='change-me'
+export GCASH_SESSION_SECRET='replace-with-a-random-secret'
+```
+
+管理员 API：`POST /api/admin/login`、`GET /api/admin/status`、`POST /api/admin/mode`，其中 mode 为 `self` 或 `visitor`。
 
 生成 CDK（设置 `GCASH_ADMIN_KEY` 后建议使用请求头鉴权）：
 

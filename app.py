@@ -8,13 +8,17 @@ from itertools import cycle
 from datetime import datetime, timezone
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
 
 from gcash_checker import GCashCheckerError, check_gcash, proxy_candidates
 from cdk_store import consume, create_cdk, redeem_cdk
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["JSON_AS_ASCII"] = False
+app.secret_key = os.getenv("GCASH_SESSION_SECRET", "change-this-session-secret")
+ADMIN_PASSWORD = os.getenv("GCASH_ADMIN_PASSWORD", "admin")
+mode_lock = threading.RLock()
+service_mode = {"mode": os.getenv("GCASH_MODE", "self").lower() if os.getenv("GCASH_MODE", "self").lower() in {"self", "visitor"} else "self"}
 MAX_BATCH = max(1, int(os.getenv("GCASH_MAX_BATCH", "100")))
 WORKERS = max(1, int(os.getenv("GCASH_WORKERS", "4")))
 executor = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="gcash-check")
@@ -131,6 +135,45 @@ def cdk_create():
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 
+def admin_required() -> bool:
+    return bool(session.get("admin"))
+
+
+@app.post("/api/admin/login")
+def admin_login():
+    payload = request.get_json(silent=True) or {}
+    if str(payload.get("password") or "") != ADMIN_PASSWORD:
+        return jsonify({"ok": False, "error": "管理员密码错误"}), 403
+    session["admin"] = True
+    return jsonify({"ok": True, "admin": True})
+
+
+@app.post("/api/admin/logout")
+def admin_logout():
+    session.pop("admin", None)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/admin/status")
+def admin_status():
+    with mode_lock:
+        mode = service_mode["mode"]
+    return jsonify({"ok": True, "admin": admin_required(), "mode": mode})
+
+
+@app.post("/api/admin/mode")
+def admin_mode():
+    if not admin_required():
+        return jsonify({"ok": False, "error": "需要管理员登录"}), 401
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get("mode") or "").lower()
+    if mode not in {"self", "visitor"}:
+        return jsonify({"ok": False, "error": "mode 必须是 self 或 visitor"}), 400
+    with mode_lock:
+        service_mode["mode"] = mode
+    return jsonify({"ok": True, "mode": mode})
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "service": "gcash-qualification-gui", "workers": WORKERS})
@@ -195,7 +238,9 @@ def create_batch():
     with jobs_lock:
         jobs[job_id] = job
     with_promo = bool(payload.get("with_promo", False))
-    visitor = bool(payload.get("visitor", False))
+    with mode_lock:
+        configured_mode = service_mode["mode"]
+    visitor = configured_mode == "visitor"
     cdk = str(payload.get("cdk") or "").strip()
     if visitor:
         if not cdk:
