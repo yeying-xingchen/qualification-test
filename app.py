@@ -11,6 +11,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 
 from gcash_checker import GCashCheckerError, check_gcash, proxy_candidates
+from cdk_store import consume, create_cdk, redeem_cdk
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["JSON_AS_ASCII"] = False
@@ -25,8 +26,12 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def safe_result(result: Any) -> dict[str, Any]:
-    return result.as_dict() if hasattr(result, "as_dict") else {"qualified": False}
+def safe_result(result: Any, visitor: bool = False) -> dict[str, Any]:
+    data = result.as_dict() if hasattr(result, "as_dict") else {"qualified": False}
+    if visitor:
+        data.pop("access_token", None)
+        data.pop("account_email", None)
+    return data
 
 
 def _proxy_transport_error(exc: BaseException) -> bool:
@@ -37,7 +42,7 @@ def _proxy_transport_error(exc: BaseException) -> bool:
     ))
 
 
-def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, target_channel: str, preset: dict[str, str]) -> None:
+def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False) -> None:
     raw_candidates = item.get("proxies") or [item.get("proxy") or ""]
     candidates = []
     for raw_proxy in raw_candidates:
@@ -49,7 +54,7 @@ def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, tar
     for candidate in candidates:
         try:
             result = check_gcash(item["token"], candidate, with_promo=with_promo, target_channel=target_channel, preset=preset)
-            row = {"index": index, "ok": True, **safe_result(result)}
+            row = {"index": index, "ok": True, **safe_result(result, visitor)}
             break
         except GCashCheckerError as exc:
             last_error = exc
@@ -103,6 +108,27 @@ def parse_items(payload: dict[str, Any]) -> list[dict[str, str]]:
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.post("/api/cdk/redeem")
+def cdk_redeem():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"ok": True, **redeem_cdk(payload.get("cdk") or payload.get("code"))})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/cdk/create")
+def cdk_create():
+    expected = os.getenv("GCASH_ADMIN_KEY", "")
+    if expected and request.headers.get("X-Admin-Key") != expected:
+        return jsonify({"ok": False, "error": "管理员密钥错误"}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"ok": True, "cdk": create_cdk(payload.get("quota", 100), payload.get("days", 30))})
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.get("/api/health")
@@ -169,10 +195,19 @@ def create_batch():
     with jobs_lock:
         jobs[job_id] = job
     with_promo = bool(payload.get("with_promo", False))
+    visitor = bool(payload.get("visitor", False))
+    cdk = str(payload.get("cdk") or "").strip()
+    if visitor:
+        if not cdk:
+            return jsonify({"ok": False, "error": "访客模式需要 CDK"}), 400
+        try:
+            consume(cdk, len(items))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 403
     preset_name, preset = resolve_preset(payload)
     target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
     for index, item in enumerate(items):
-        executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset)
+        executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset, visitor)
     return jsonify({"ok": True, "job_id": job_id, "total": len(items)})
 
 

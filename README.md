@@ -27,6 +27,20 @@ npm install
 
 浏览器打开 `http://127.0.0.1:18097/`。
 
+## 自部署与访客模式
+
+默认是自部署模式，不需要 CDK，适合管理员直接运行。访客模式需要有效 CDK，并按批次账号数量扣减额度；访客结果不会返回邮箱和 Access Token。
+
+生成 CDK（设置 `GCASH_ADMIN_KEY` 后建议使用请求头鉴权）：
+
+```bash
+curl -X POST http://127.0.0.1:18097/api/cdk/create \
+  -H 'Content-Type: application/json' -H 'X-Admin-Key: your-admin-key' \
+  -d '{"quota":100,"days":30}'
+```
+
+校验 CDK：`POST /api/cdk/redeem`，请求体 `{\"cdk\":\"GC-...\"}`。
+
 ## API
 
 列出内置预设：
