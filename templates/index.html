@@ -37,6 +37,7 @@
       <div class="toolbar"><h2>检测结果</h2><button id="export">导出 JSON</button></div>
       <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>账户详情</th><th>Checkout</th><th>币种</th><th>全部可用渠道</th></tr></thead><tbody id="results"></tbody></table></div>
     </section>
+  <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><p id="modalEmail"></p><label>Access Token<textarea id="modalToken" readonly></textarea></label><button id="copyModalToken">复制 AT</button></div></div>
   </main>
   <script src="/static/app.js"></script>
 </body>
