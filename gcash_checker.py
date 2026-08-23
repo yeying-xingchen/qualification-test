@@ -40,6 +40,7 @@ class GCashCheckerError(RuntimeError):
 class QualificationResult:
     qualified: bool
     checkout_session_id: str
+    target_channel: str
     processor_entity: str
     payment_method_type: str
     checkout_amount: Any
@@ -51,7 +52,8 @@ class QualificationResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "qualified": self.qualified,
-            "channel": "gcash",
+            "channel": self.target_channel,
+            "target_channel": self.target_channel,
             "country": "PH",
             "currency": self.checkout_currency or "PHP",
             "checkout_session_id": self.checkout_session_id,
@@ -255,6 +257,20 @@ def _available_channels(methods: Any) -> list[str]:
     return channels
 
 
+def _channel_available(methods: Any, target: str) -> bool:
+    target = target.lower().strip()
+    if target == "gcash":
+        return bool(_gcash_method(methods))
+    if target == "card":
+        return any(
+            isinstance(method, dict)
+            and not str(method.get("id") or "").startswith("cpmt_")
+            and "card" in json.dumps(method, ensure_ascii=False).lower()
+            for method in (methods if isinstance(methods, list) else [])
+        )
+    return any(target in json.dumps(method, ensure_ascii=False).lower() for method in (methods if isinstance(methods, list) else []))
+
+
 def _gcash_method(methods: Any) -> str:
     if not isinstance(methods, list):
         return ""
@@ -272,12 +288,14 @@ def _gcash_method(methods: Any) -> str:
     return ""
 
 
-def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False) -> QualificationResult:
+def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False, target_channel: str = "gcash", preset: dict[str, str] | None = None) -> QualificationResult:
     token = extract_access_token(access_token)
     if not token:
         raise GCashCheckerError("缺少 Access Token")
-    if plan != "plus":
-        raise GCashCheckerError("当前 GCash 检测仅支持 Plus checkout")
+    preset = preset or {}
+    target_channel = str(preset.get("channel") or target_channel or "gcash").lower().strip()
+    if plan != str(preset.get("plan") or "plus").lower():
+        raise GCashCheckerError("检测预设的计划参数不一致")
     normalized = _proxy(proxy)
     last_error: BaseException | None = None
     for candidate in proxy_candidates(normalized)[:MAX_PROXY_RETRIES]:
@@ -285,7 +303,8 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
             device_id, did = str(uuid.uuid4()), str(uuid.uuid4())
             http, meta = _create_checkout(token, candidate, device_id, did)
             state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
-            method_id = _gcash_method(state.get("custom_payment_methods"))
+            methods = state.get("custom_payment_methods")
+            method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             for _ in range(3):
                 if method_id:
                     break
@@ -293,9 +312,11 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                 import time
                 time.sleep(await_seconds)
                 state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
-                method_id = _gcash_method(state.get("custom_payment_methods"))
+                methods = state.get("custom_payment_methods")
+                method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             channels = _available_channels(state.get("custom_payment_methods"))
-            return QualificationResult(bool(method_id), meta["checkout_session_id"], meta["processor_entity"], "gcash" if method_id else "", _amount(state), _currency(state), True, "GCash custom payment method published" if method_id else "PH checkout 未发布 GCash", channels)
+            available = bool(method_id) if target_channel == "gcash" else _channel_available(state.get("custom_payment_methods"), target_channel)
+            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"PH checkout 未发布 {target_channel}", channels)
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):
