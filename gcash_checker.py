@@ -24,6 +24,12 @@ from sentinel_token import SentinelTokenProvider
 OPENAI_CHECKOUT_URL = "https://chatgpt.com/backend-api/payments/checkout"
 CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:144.0) Gecko/20100101 Firefox/144.0"
 MAX_PROXY_RETRIES = 2
+# Some Checkout responses expose only an opaque custom-payment-method id.
+# This known OpenAI GCash method must be treated as GCash even without a
+# human-readable name in the method payload.
+KNOWN_GCASH_METHOD_IDS = {
+    "cpmt_1TOgstC6h1nxGoI3WUVEY2cJ",
+}
 
 
 class GCashCheckerError(RuntimeError):
@@ -238,6 +244,8 @@ def _available_channels(methods: Any) -> list[str]:
     channels = []
     for method in methods:
         name = _channel_name(method)
+        if isinstance(method, dict) and str(method.get("id") or "") in KNOWN_GCASH_METHOD_IDS:
+            name = "gcash"
         if name and name.lower() not in {item.lower() for item in channels}:
             channels.append(name)
     return channels
@@ -247,11 +255,16 @@ def _gcash_method(methods: Any) -> str:
     if not isinstance(methods, list):
         return ""
     for method in methods:
-        if not isinstance(method, dict) or not str(method.get("id") or "").startswith("cpmt_"):
+        if not isinstance(method, dict):
             continue
+        method_id = str(method.get("id") or "")
+        if not method_id.startswith("cpmt_"):
+            continue
+        if method_id in KNOWN_GCASH_METHOD_IDS:
+            return method_id
         text = json.dumps(method, ensure_ascii=False).lower()
         if "gcash" in text:
-            return str(method["id"])
+            return method_id
     return ""
 
 
