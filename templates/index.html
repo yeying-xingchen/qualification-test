@@ -15,7 +15,7 @@
       <p>批量使用菲律宾代理创建 PH/PHP Checkout，仅检测是否公开 GCash 渠道，不发起支付。</p>
     </header>
 
-    <section class="card mode-card"><div class="mode-note">当前服务模式由管理员后台统一配置</div><label id="cdkField" hidden>CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>
+    <section class="card mode-card" id="modeCard" hidden><div class="mode-note">访客模式需要 CDK</div><label id="cdkField">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>
     <section class="card">
       <div class="grid">
         <label>Token / 账号整行（每行一条）<textarea id="tokens" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea></label>
