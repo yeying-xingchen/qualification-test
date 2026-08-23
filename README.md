@@ -84,6 +84,29 @@ Content-Type: application/json
 
 渠道代理优先于通用代理；每个渠道支持字符串、数组或换行字符串。
 
+## 有资格 Token 批量操作
+
+批量检测完成后，结果区域提供两个操作：
+
+- **复制全部有资格 Token**：只提取检测结果中 `ok=true` 且 `qualified=true` 的 Access Token，并按每行一个 Token 的格式复制到剪贴板。
+- **提交全部有资格 Token**：填写目标 API 地址后，手动点击提交按钮，将全部有资格 Token 通过 `POST` 请求发送到目标 API。系统不会在检测完成后自动提交。
+
+目标 API 请求格式：
+
+```http
+POST https://example.com/api/tokens
+Content-Type: application/json
+```
+
+```json
+{
+  "tokens": ["<qualified-token-1>", "<qualified-token-2>"],
+  "count": 2
+}
+```
+
+目标 API 返回 HTTP 2xx 时，页面显示提交成功；非 2xx 响应或网络错误会显示失败原因。由于 Token 属于敏感凭据，请仅提交到受信任的 HTTPS 地址，并避免将 Token 写入日志、截图或公共工单。
+
 ## 代理示例
 
 ```text

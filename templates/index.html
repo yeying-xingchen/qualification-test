@@ -39,7 +39,12 @@
     </section>
 
     <section class="card" id="resultsCard" hidden>
-      <div class="toolbar"><h2>检测结果</h2><button id="export">导出 JSON</button></div>
+      <div class="toolbar"><h2>检测结果</h2><div class="toolbar-actions"><button id="copyQualified" type="button">复制全部有资格 Token</button><button id="export" type="button">导出 JSON</button></div></div>
+      <div class="qualified-actions">
+        <label>自动提交 API 地址（仅在点击按钮后提交）<input id="submitEndpoint" type="url" placeholder="https://example.com/api/tokens" autocomplete="off"></label>
+        <button id="submitQualified" type="button">提交全部有资格 Token</button>
+        <span class="field-hint">请求体：{ "tokens": ["…"], "count": 1 }</span>
+      </div>
       <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>账户详情</th><th>Checkout</th><th>币种</th><th>全部可用渠道</th></tr></thead><tbody id="results"></tbody></table></div>
     </section>
   <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><p id="modalEmail"></p><label>Access Token<textarea id="modalToken" readonly></textarea></label><button id="copyModalToken">复制 AT</button></div></div>
