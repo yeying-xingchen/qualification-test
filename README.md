@@ -2,6 +2,8 @@
 
 独立的批量 GCash qualification checker，不依赖其他项目目录。
 
+Sentinel 运行时需要 Node.js 18+ 和本地 `jsdom` 依赖；首次安装请执行 `npm install`。
+
 ## 功能
 
 - 使用 PH/PHP Checkout 检测是否发布 GCash 渠道
@@ -16,6 +18,7 @@
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+npm install
 .venv/bin/python app.py
 ```
 

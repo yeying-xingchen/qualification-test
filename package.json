@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Local Sentinel VM runtime for the standalone GCash qualification GUI",
+  "dependencies": {
+    "jsdom": "^30.0.1"
+  }
+}
