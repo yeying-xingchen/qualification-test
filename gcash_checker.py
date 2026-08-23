@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
+import base64
 
 from curl_cffi import requests
 
@@ -49,6 +50,8 @@ class QualificationResult:
     evidence: str
     available_channels: list[str] = field(default_factory=list)
     channel_details: list[dict[str, Any]] = field(default_factory=list)
+    account_email: str = ""
+    access_token: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -66,7 +69,25 @@ class QualificationResult:
             "available_channels": self.available_channels,
             "channel_details": self.channel_details,
             "gcash_available": self.qualified,
+            "account_email": self.account_email,
+            "access_token": self.access_token,
         }
+
+
+def extract_account_email(value: str) -> str:
+    text = str(value or "").strip()
+    parts = text.split("----")
+    if parts and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", parts[0].strip()):
+        return parts[0].strip()
+    token = extract_access_token(text)
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+        profile = data.get("https://api.openai.com/profile") or {}
+        return str(profile.get("email") or data.get("email") or "")
+    except Exception:
+        return ""
 
 
 def extract_access_token(value: str) -> str:
@@ -308,7 +329,9 @@ def _gcash_method(methods: Any) -> str:
 
 
 def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False, target_channel: str = "gcash", preset: dict[str, str] | None = None) -> QualificationResult:
-    token = extract_access_token(access_token)
+    raw_account = str(access_token or "").strip()
+    token = extract_access_token(raw_account)
+    account_email = extract_account_email(raw_account)
     if not token:
         raise GCashCheckerError("缺少 Access Token")
     preset = preset or {}
@@ -337,7 +360,7 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
             details = _channel_details(state.get("custom_payment_methods"))
             available = bool(method_id) if target_channel == "gcash" else _channel_available(state.get("custom_payment_methods"), target_channel)
             country = str(preset.get("country") or "PH").upper()
-            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details)
+            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, account_email, token)
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):
