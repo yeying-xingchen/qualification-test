@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GCash Qualification</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="eyebrow">PHILIPPINES · CHECKOUT QUALIFICATION</div>
+      <h1>GCash 资格检测</h1>
+      <p>批量使用菲律宾代理创建 PH/PHP Checkout，仅检测是否公开 GCash 渠道，不发起支付。</p>
+    </header>
+
+    <section class="card">
+      <div class="grid">
+        <label>Token / 账号整行（每行一条）<textarea id="tokens" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea></label>
+        <label>菲律宾代理（每行一条）<textarea id="proxies" placeholder="host:port:user:password&#10;us.1024proxy.io:3000:username:password&#10;curl -x us.1024proxy.io:3000 -U &quot;user:password&quot; ipinfo.io&#10;socks5://user:pass@ph-proxy:1080&#10;代理池会按顺序循环复用"></textarea></label>
+      </div>
+      <label class="check"><input id="withPromo" type="checkbox"> 同时携带优惠请求（不代表优惠资格）</label>
+      <button id="start">开始批量检测</button>
+      <span id="message"></span>
+    </section>
+
+    <section class="card stats" id="stats" hidden>
+      <div><b id="total">0</b><span>总数</span></div>
+      <div><b id="completed">0</b><span>已完成</span></div>
+      <div><b id="qualified">0</b><span>发现 GCash</span></div>
+      <div><b id="failed">0</b><span>失败</span></div>
+    </section>
+
+    <section class="card" id="resultsCard" hidden>
+      <div class="toolbar"><h2>检测结果</h2><button id="export">导出 JSON</button></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>Checkout</th><th>币种</th><th>说明</th></tr></thead><tbody id="results"></tbody></table></div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
