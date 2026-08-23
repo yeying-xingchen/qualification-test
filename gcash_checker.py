@@ -328,7 +328,7 @@ def _gcash_method(methods: Any) -> str:
     return ""
 
 
-def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False, target_channel: str = "gcash", preset: dict[str, str] | None = None) -> QualificationResult:
+def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False, target_channel: str = "gcash", preset: dict[str, str] | None = None, target_channels: list[str] | None = None) -> QualificationResult:
     raw_account = str(access_token or "").strip()
     token = extract_access_token(raw_account)
     account_email = extract_account_email(raw_account)
@@ -358,8 +358,11 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                 method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             channels = _available_channels(state.get("custom_payment_methods"))
             details = _channel_details(state.get("custom_payment_methods"))
-            available = bool(method_id) if target_channel == "gcash" else _channel_available(state.get("custom_payment_methods"), target_channel)
+            selected = [str(channel).lower() for channel in (target_channels or [target_channel]) if str(channel).strip()]
+            availability = {channel: (_channel_available(state.get("custom_payment_methods"), channel) if channel != "gcash" else bool(_gcash_method(state.get("custom_payment_methods")))) for channel in selected}
+            available = availability.get(target_channel, False)
             country = str(preset.get("country") or "PH").upper()
+            details.append({"selected": availability})
             return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, account_email, token)
         except Exception as exc:
             last_error = exc

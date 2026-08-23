@@ -60,7 +60,7 @@ def _proxy_transport_error(exc: BaseException) -> bool:
     ))
 
 
-def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False) -> None:
+def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, channels: list[str] | None = None) -> None:
     raw_candidates = item.get("proxies") or [item.get("proxy") or ""]
     candidates = []
     for raw_proxy in raw_candidates:
@@ -71,7 +71,7 @@ def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, tar
     last_error: BaseException | None = None
     for candidate in candidates:
         try:
-            result = check_gcash(item["token"], candidate, with_promo=with_promo, target_channel=target_channel, preset=preset)
+            result = check_gcash(item["token"], candidate, with_promo=with_promo, target_channel=target_channel, preset=preset, target_channels=channels)
             row = {"index": index, "ok": True, **safe_result(result, visitor)}
             break
         except GCashCheckerError as exc:
@@ -277,7 +277,8 @@ def create_batch():
     preset_name, preset = resolve_preset(payload)
     target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
     for index, item in enumerate(items):
-        executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset, visitor)
+        channels = [str(channel).lower() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
+        executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset, visitor, channels)
     return jsonify({"ok": True, "job_id": job_id, "total": len(items)})
 
 
