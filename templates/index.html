@@ -20,7 +20,7 @@
         <label>菲律宾代理（每行一条）<textarea id="proxies" placeholder="host:port:user:password&#10;us.1024proxy.io:3000:username:password&#10;curl -x us.1024proxy.io:3000 -U &quot;user:password&quot; ipinfo.io&#10;socks5://user:pass@ph-proxy:1080&#10;代理池会按顺序循环复用"></textarea></label>
       </div>
       <label class="check"><input id="withPromo" type="checkbox"> 同时携带优惠请求（不代表优惠资格）</label>
-      <button id="start">开始批量检测</button>
+      <div class="preset"><b>检测预设：</b><span>菲律宾 / PHP / GCash</span></div><button id="start">开始批量检测</button>
       <span id="message"></span>
     </section>
 
@@ -33,7 +33,7 @@
 
     <section class="card" id="resultsCard" hidden>
       <div class="toolbar"><h2>检测结果</h2><button id="export">导出 JSON</button></div>
-      <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>Checkout</th><th>币种</th><th>说明</th></tr></thead><tbody id="results"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>GCash 状态</th><th>Checkout</th><th>币种</th><th>全部可用渠道</th></tr></thead><tbody id="results"></tbody></table></div>
     </section>
   </main>
   <script src="/static/app.js"></script>

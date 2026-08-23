@@ -7,6 +7,8 @@ Sentinel 运行时需要 Node.js 18+ 和本地 `jsdom` 依赖；首次安装请�
 ## 功能
 
 - 使用 PH/PHP Checkout 检测是否发布 GCash 渠道
+- 输出 Checkout 返回的全部可用支付渠道，并单独标记 `gcash_available`
+- GUI 内置“菲律宾 / PHP / GCash”检测预设
 - 支持批量 Token 和代理
 - 支持原始 JWT，以及 `email----...----JWT` 整行账号格式
 - 支持 `host:port:user:password`、`curl -x/-U`、HTTP/HTTPS、SOCKS5/SOCKS5H 代理
