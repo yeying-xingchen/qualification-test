@@ -11,6 +11,7 @@ Sentinel 运行时需要 Node.js 18+ 和本地 `jsdom` 依赖；首次安装请�
 - GCash 资格只认定 `cpmt_1TOgstC6h1nxGoI3WUVEY2cJ`，其他支付方式不会判定为 GCash
 - GUI 内置预设：菲律宾 GCash、菲律宾 Card、英国 PayPal、荷兰 iDEAL、越南 MoMo
 - 支持批量 Token 和代理
+- 支持按渠道单独配置代理，未配置渠道自动回退到通用代理池
 - 支持原始 JWT，以及 `email----...----JWT` 整行账号格式
 - 支持 `host:port:user:password`、`curl -x/-U`、HTTP/HTTPS、SOCKS5/SOCKS5H 代理
 - 代理池轮询复用；代理隧道失败时自动尝试备用入口
@@ -75,7 +76,13 @@ Content-Type: application/json
 
 支持预设：`gcash`、`card`、`paypal_uk`、`ideal_nl`、`momo_vn`。响应中的 `channel_details` 会包含 OpenAI Checkout 返回的渠道名称、ID 和原始类型。
 
-批量检测仍使用 `POST /api/gcash/batch`，任务状态使用 `GET /api/gcash/batch/<job_id>`。
+批量检测仍使用 `POST /api/gcash/batch`，任务状态使用 `GET /api/gcash/batch/<job_id>`。除传统 `proxies` 外，也可传入按渠道配置的 `channel_proxies`：
+
+```json
+{"tokens":["<JWT>"],"proxies":["fallback:8080"],"channel_proxies":{"gcash":["ph-gcash:8080"],"card":"ph-card:8080"},"target_channel":"gcash"}
+```
+
+渠道代理优先于通用代理；每个渠道支持字符串、数组或换行字符串。
 
 ## 代理示例
 

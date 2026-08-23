@@ -60,8 +60,19 @@ def _proxy_transport_error(exc: BaseException) -> bool:
     ))
 
 
-def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, channels: list[str] | None = None) -> None:
-    raw_candidates = item.get("proxies") or [item.get("proxy") or ""]
+def _channel_proxy_values(item: dict[str, Any], channel: str) -> list[str]:
+    channel_proxies = item.get("channel_proxies")
+    if isinstance(channel_proxies, dict):
+        values = channel_proxies.get(channel) or channel_proxies.get(channel.lower())
+        if isinstance(values, list):
+            return [str(value).strip() for value in values if str(value).strip()]
+        if values:
+            return [str(values).strip()]
+    return [str(value).strip() for value in (item.get("proxies") or [item.get("proxy") or ""]) if str(value).strip()]
+
+
+def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, channels: list[str] | None = None) -> None:
+    raw_candidates = _channel_proxy_values(item, target_channel)
     candidates = []
     for raw_proxy in raw_candidates:
         try:
@@ -98,8 +109,9 @@ def run_one(job_id: str, index: int, item: dict[str, str], with_promo: bool, tar
             job["finished_at"] = now()
 
 
-def parse_items(payload: dict[str, Any]) -> list[dict[str, str]]:
+def parse_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_items = payload.get("items")
+    payload_channel_proxies = payload.get("channel_proxies") if isinstance(payload.get("channel_proxies"), dict) else {}
     if isinstance(raw_items, list):
         items = []
         for item in raw_items:
@@ -111,16 +123,29 @@ def parse_items(payload: dict[str, Any]) -> list[dict[str, str]]:
                 proxy_list = [str(value).strip() for value in proxy_values if str(value).strip()]
             else:
                 proxy_list = [str(proxy_values).strip()] if str(proxy_values).strip() else []
-            items.append({"token": token, "proxy": proxy_list[0] if proxy_list else "", "proxies": proxy_list})
+            item_channel_proxies = item.get("channel_proxies")
+            normalized_channel_proxies = dict(payload_channel_proxies)
+            if isinstance(item_channel_proxies, dict):
+                normalized_channel_proxies.update(item_channel_proxies)
+            normalized_channel_proxies = {str(channel).lower().strip(): ([str(value).strip() for value in values if str(value).strip()] if isinstance(values, list) else [line.strip() for line in str(values or "").splitlines() if line.strip()]) for channel, values in normalized_channel_proxies.items()}
+            items.append({"token": token, "proxy": proxy_list[0] if proxy_list else "", "proxies": proxy_list, "channel_proxies": normalized_channel_proxies})
         return items
     tokens = [line.strip() for line in str(payload.get("tokens") or "").splitlines() if line.strip()]
     proxies = [line.strip() for line in str(payload.get("proxies") or "").splitlines() if line.strip()]
-    if not proxies:
-        return [{"token": token, "proxy": "", "proxies": []} for token in tokens]
+    channel_proxies = {}
+    for channel, values in payload_channel_proxies.items():
+        if isinstance(values, list):
+            normalized = [str(value).strip() for value in values if str(value).strip()]
+        else:
+            normalized = [line.strip() for line in str(values or "").splitlines() if line.strip()]
+        if normalized:
+            channel_proxies[str(channel).lower().strip()] = normalized
+    if not proxies and not channel_proxies:
+        return [{"token": token, "proxy": "", "proxies": [], "channel_proxies": {}} for token in tokens]
     # Keep the whole pool on every item so a failed tunnel can be retried with
     # another proxy; the first proxy is still assigned round-robin.
     proxy_cycle = cycle(proxies)
-    return [{"token": token, "proxy": next(proxy_cycle), "proxies": proxies} for token in tokens]
+    return [{"token": token, "proxy": next(proxy_cycle), "proxies": proxies, "channel_proxies": channel_proxies} for token in tokens]
 
 
 @app.get("/")
@@ -210,6 +235,7 @@ BUILTIN_PRESETS = {
     "paypal_uk": {"channel": "paypal", "country": "GB", "currency": "GBP", "plan": "plus"},
     "ideal_nl": {"channel": "ideal", "country": "NL", "currency": "EUR", "plan": "plus"},
     "momo_vn": {"channel": "momo", "country": "VN", "currency": "VND", "plan": "plus"},
+    "gopay_id": {"channel": "gopay", "country": "ID", "currency": "IDR", "plan": "plus"},
 }
 
 
@@ -233,12 +259,16 @@ def list_presets():
 def check_one():
     payload = request.get_json(silent=True) or {}
     token = payload.get("token") or payload.get("access_token") or ""
-    proxy = payload.get("proxy") or ""
-    if not token or not proxy:
-        return jsonify({"ok": False, "error": "token 和 proxy 均为必填"}), 400
     name, preset = resolve_preset(payload)
+    target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
+    channel_map = payload.get("channel_proxies") if isinstance(payload.get("channel_proxies"), dict) else {}
+    proxy = payload.get("proxy") or channel_map.get(target_channel) or ""
+    if isinstance(proxy, list):
+        proxy = proxy[0] if proxy else ""
+    if not token or not proxy:
+        return jsonify({"ok": False, "error": "token 和该渠道 proxy 均为必填"}), 400
     try:
-        result = check_gcash(token, proxy, target_channel=str(payload.get("target_channel") or preset.get("channel") or "gcash"), preset=preset)
+        result = check_gcash(token, str(proxy), target_channel=target_channel, preset=preset)
     except GCashCheckerError as exc:
         return jsonify({"ok": False, "preset": name, "error": str(exc)}), 400
     except Exception as exc:

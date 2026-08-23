@@ -16,13 +16,18 @@
     </header>
 
     <section class="card mode-card" id="modeCard" hidden><div class="mode-note">访客模式需要 CDK</div><label id="cdkField">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>
-    <section class="card">
+    <section class="card input-card">
+      <div class="section-heading">
+        <div><span class="section-kicker">01 · INPUT</span><h2>准备检测数据</h2></div>
+        <span class="hint">每行一条，支持批量粘贴</span>
+      </div>
       <div class="grid">
-        <label>Token / 账号整行（每行一条）<textarea id="tokens" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea></label>
-        <label>菲律宾代理（每行一条）<textarea id="proxies" placeholder="host:port:user:password&#10;us.1024proxy.io:3000:username:password&#10;curl -x us.1024proxy.io:3000 -U &quot;user:password&quot; ipinfo.io&#10;socks5://user:pass@ph-proxy:1080&#10;代理池会按顺序循环复用"></textarea></label>
+        <label>Token / 账号整行（每行一条）<textarea id="tokens" aria-describedby="tokenHint" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea><span id="tokenHint" class="field-hint">已识别 <b id="tokenCount">0</b> 条 Token</span></label>
+        <label>通用代理（每行一条，可作为未单独配置渠道的后备）<textarea id="proxies" aria-describedby="proxyHint" placeholder="host:port:user:password&#10;us.1024proxy.io:3000:username:password&#10;curl -x us.1024proxy.io:3000 -U &quot;user:password&quot; ipinfo.io&#10;socks5://user:pass@ph-proxy:1080&#10;代理池会按顺序循环复用"></textarea><span id="proxyHint" class="field-hint">已识别 <b id="proxyCount">0</b> 条代理</span></label>
       </div>
       <label class="check"><input id="withPromo" type="checkbox"> 同时携带优惠请求（不代表优惠资格）</label>
-      <label class="preset-select">检测预设<select id="preset"><option value="gcash">菲律宾 / PHP / GCash</option><option value="card">菲律宾 / PHP / Card</option><option value="paypal_uk">英国 / GBP / PayPal</option><option value="ideal_nl">荷兰 / EUR / iDEAL</option><option value="momo_vn">越南 / VND / MoMo</option><option value="custom">自定义渠道</option></select></label><fieldset class="channel-select"><legend>同时检测渠道</legend><label><input type="checkbox" name="channels" value="gcash" checked> GCash</label><label><input type="checkbox" name="channels" value="card"> Card</label><label><input type="checkbox" name="channels" value="paypal"> PayPal</label><label><input type="checkbox" name="channels" value="ideal"> iDEAL</label><label><input type="checkbox" name="channels" value="momo"> MoMo</label></fieldset><label class="custom-channel">自定义渠道<input id="customChannel" value="gcash" placeholder="例如 card 或 gcash"></label><button id="start">开始批量检测</button>
+      <label class="channel-proxy-field">渠道专用代理（可选，未填写的渠道使用通用代理）<textarea id="channelProxies" placeholder="每行格式：渠道=代理；同一渠道可填写多行，例如：&#10;gcash=ph-gcash.example:8080:user:pass&#10;card=ph-card.example:8080:user:pass&#10;paypal=uk-paypal.example:8080:user:pass"></textarea></label>
+      <label class="preset-select">检测预设<select id="preset"><option value="gcash">菲律宾 / PHP / GCash</option><option value="card">菲律宾 / PHP / Card</option><option value="paypal_uk">英国 / GBP / PayPal</option><option value="ideal_nl">荷兰 / EUR / iDEAL</option><option value="momo_vn">越南 / VND / MoMo</option><option value="gopay_id">印度尼西亚 / IDR / GoPay</option><option value="custom">自定义渠道</option></select></label><fieldset class="channel-select"><legend>同时检测渠道</legend><label><input type="checkbox" name="channels" value="gcash" checked> GCash</label><label><input type="checkbox" name="channels" value="card"> Card</label><label><input type="checkbox" name="channels" value="paypal"> PayPal</label><label><input type="checkbox" name="channels" value="ideal"> iDEAL</label><label><input type="checkbox" name="channels" value="momo"> MoMo</label><label><input type="checkbox" name="channels" value="gopay"> GoPay</label></fieldset><label class="custom-channel">自定义渠道<input id="customChannel" value="gcash" placeholder="例如 card 或 gcash"></label><button id="start">开始批量检测</button>
       <span id="message"></span>
     </section>
 
