@@ -127,8 +127,17 @@ def create_batch():
         jobs[job_id] = job
     with_promo = bool(payload.get("with_promo", False))
     presets = payload.get("presets") if isinstance(payload.get("presets"), dict) else {}
+    builtin = {
+        "gcash": {"channel": "gcash", "country": "PH", "currency": "PHP", "plan": "plus"},
+        "card": {"channel": "card", "country": "PH", "currency": "PHP", "plan": "plus"},
+        "paypal_uk": {"channel": "paypal", "country": "GB", "currency": "GBP", "plan": "plus"},
+        "ideal_nl": {"channel": "ideal", "country": "NL", "currency": "EUR", "plan": "plus"},
+        "momo_vn": {"channel": "momo", "country": "VN", "currency": "VND", "plan": "plus"},
+    }
     preset_name = str(payload.get("preset") or "gcash").strip()
-    preset = presets.get(preset_name) if isinstance(presets.get(preset_name), dict) else {}
+    preset = dict(builtin.get(preset_name, {}))
+    if isinstance(presets.get(preset_name), dict):
+        preset.update(presets[preset_name])
     target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
     for index, item in enumerate(items):
         executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset)

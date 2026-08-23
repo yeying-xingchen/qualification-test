@@ -171,7 +171,7 @@ def _session(proxy: str):
     return session
 
 
-def _create_checkout(token: str, proxy: str, device_id: str, did: str) -> tuple[Any, dict[str, Any]]:
+def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: dict[str, str]) -> tuple[Any, dict[str, Any]]:
     http = _session(proxy)
     try:
         http.cookies.set("oai-did", did, domain="chatgpt.com")
@@ -182,9 +182,11 @@ def _create_checkout(token: str, proxy: str, device_id: str, did: str) -> tuple[
     except Exception:
         pass
     sentinel = asyncio.run(_sentinel_headers(proxy, device_id, did))
+    country = str(preset.get("country") or "PH").upper()
+    currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP"}.get(country, "USD")).upper()
     payload = {
-        "entry_point": "all_plans_pricing_modal", "plan_name": "chatgptplusplan",
-        "billing_details": {"country": "PH", "currency": "PHP"},
+        "entry_point": "all_plans_pricing_modal", "plan_name": str(preset.get("plan_name") or "chatgptplusplan"),
+        "billing_details": {"country": country, "currency": currency},
         "cancel_url": "https://chatgpt.com/", "checkout_ui_mode": "custom", "check_card_proxy": True,
     }
     response = http.post(OPENAI_CHECKOUT_URL, json=payload, headers=_headers(token, device_id, sentinel), timeout=60)
@@ -301,7 +303,7 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
     for candidate in proxy_candidates(normalized)[:MAX_PROXY_RETRIES]:
         try:
             device_id, did = str(uuid.uuid4()), str(uuid.uuid4())
-            http, meta = _create_checkout(token, candidate, device_id, did)
+            http, meta = _create_checkout(token, candidate, device_id, did, preset)
             state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
             methods = state.get("custom_payment_methods")
             method_id = _gcash_method(methods) if target_channel == "gcash" else ""
@@ -316,7 +318,8 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                 method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             channels = _available_channels(state.get("custom_payment_methods"))
             available = bool(method_id) if target_channel == "gcash" else _channel_available(state.get("custom_payment_methods"), target_channel)
-            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"PH checkout 未发布 {target_channel}", channels)
+            country = str(preset.get("country") or "PH").upper()
+            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels)
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):
