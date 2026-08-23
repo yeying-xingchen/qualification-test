@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from itertools import cycle
 from datetime import datetime, timezone
@@ -18,7 +20,19 @@ app.config["JSON_AS_ASCII"] = False
 app.secret_key = os.getenv("GCASH_SESSION_SECRET", "change-this-session-secret")
 ADMIN_PASSWORD = os.getenv("GCASH_ADMIN_PASSWORD", "admin")
 mode_lock = threading.RLock()
-service_mode = {"mode": os.getenv("GCASH_MODE", "self").lower() if os.getenv("GCASH_MODE", "self").lower() in {"self", "visitor"} else "self"}
+MODE_FILE = Path(os.getenv("GCASH_MODE_FILE", "data/service_mode.json"))
+
+def _load_mode() -> str:
+    configured = os.getenv("GCASH_MODE", "").lower().strip()
+    if configured in {"self", "visitor"}:
+        return configured
+    try:
+        value = json.loads(MODE_FILE.read_text(encoding="utf-8")).get("mode", "self")
+        return value if value in {"self", "visitor"} else "self"
+    except Exception:
+        return "self"
+
+service_mode = {"mode": _load_mode()}
 MAX_BATCH = max(1, int(os.getenv("GCASH_MAX_BATCH", "100")))
 WORKERS = max(1, int(os.getenv("GCASH_WORKERS", "4")))
 executor = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="gcash-check")
@@ -176,12 +190,18 @@ def admin_mode():
         return jsonify({"ok": False, "error": "mode 必须是 self 或 visitor"}), 400
     with mode_lock:
         service_mode["mode"] = mode
+        MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = MODE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"mode": mode}, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(MODE_FILE)
     return jsonify({"ok": True, "mode": mode})
 
 
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, "service": "gcash-qualification-gui", "workers": WORKERS})
+    with mode_lock:
+        mode = service_mode["mode"]
+    return jsonify({"ok": True, "service": "gcash-qualification-gui", "workers": WORKERS, "mode": mode})
 
 
 BUILTIN_PRESETS = {
