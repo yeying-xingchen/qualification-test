@@ -246,6 +246,10 @@ def _available_channels(methods: Any) -> list[str]:
         name = _channel_name(method)
         if isinstance(method, dict) and str(method.get("id") or "") in KNOWN_GCASH_METHOD_IDS:
             name = "gcash"
+        if name.lower() == "gcash" and not (
+            isinstance(method, dict) and str(method.get("id") or "") in KNOWN_GCASH_METHOD_IDS
+        ):
+            name = str(method.get("id") or "unknown") if isinstance(method, dict) else name
         if name and name.lower() not in {item.lower() for item in channels}:
             channels.append(name)
     return channels
@@ -263,7 +267,7 @@ def _gcash_method(methods: Any) -> str:
         if method_id in KNOWN_GCASH_METHOD_IDS:
             return method_id
         text = json.dumps(method, ensure_ascii=False).lower()
-        if "gcash" in text:
+        if "gcash" in text and method_id in KNOWN_GCASH_METHOD_IDS:
             return method_id
     return ""
 
