@@ -114,6 +114,11 @@ def index():
     return render_template("index.html")
 
 
+@app.get("/admin")
+def admin_page():
+    return render_template("admin.html")
+
+
 @app.post("/api/cdk/redeem")
 def cdk_redeem():
     payload = request.get_json(silent=True) or {}

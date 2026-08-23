@@ -8,14 +8,14 @@
 </head>
 <body>
   <main class="shell">
-    <section class="card admin-card"><h2>管理员后台</h2><div class="admin-row"><input id="adminPassword" type="password" placeholder="管理员密码"><button id="adminLogin">登录</button><select id="adminMode" disabled><option value="self">自部署模式</option><option value="visitor">访客模式</option></select><button id="adminApply" disabled>应用模式</button><span id="adminMessage"></span></div></section>
+    <div class="home-admin-link"><a href="/admin">管理员后台</a></div>
     <header>
       <div class="eyebrow">PHILIPPINES · CHECKOUT QUALIFICATION</div>
       <h1>GCash 资格检测</h1>
       <p>批量使用菲律宾代理创建 PH/PHP Checkout，仅检测是否公开 GCash 渠道，不发起支付。</p>
     </header>
 
-    <section class="card mode-card"><label>运行模式<select id="mode"><option value="self">自部署模式（默认）</option><option value="visitor">访客模式（需要 CDK）</option></select></label><label id="cdkField" hidden>CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>
+    <section class="card mode-card"><div class="mode-note">当前服务模式由管理员后台统一配置</div><label id="cdkField" hidden>CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>
     <section class="card">
       <div class="grid">
         <label>Token / 账号整行（每行一条）<textarea id="tokens" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea></label>

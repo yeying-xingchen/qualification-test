@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管理员后台 · GCash</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body><main class="shell admin-shell"><header><div class="eyebrow">ADMIN CONSOLE</div><h1>管理员后台</h1><p>登录后切换全局服务模式，主页用户不能自行更改模式。</p></header>
+<section class="card"><div class="admin-row"><input id="adminPassword" type="password" placeholder="管理员密码"><button id="adminLogin">登录</button><span id="adminMessage"></span></div></section>
+<section class="card" id="adminControls" hidden><h2>服务模式</h2><p id="currentMode"></p><div class="admin-row"><select id="adminMode"><option value="self">自部署模式</option><option value="visitor">访客模式</option></select><button id="adminApply">应用模式</button><button id="adminLogout">退出登录</button></div></section>
+<a class="back-link" href="/">返回检测主页</a></main><script src="/static/admin.js"></script></body></html>
