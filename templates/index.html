@@ -6,7 +6,7 @@
   <title>GCash Qualification</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body data-service-mode="{{ service_mode|default('self', true) }}">
   <main class="shell">
     <div class="home-admin-link"><a href="/admin">管理员后台</a></div>
     <header>
@@ -15,7 +15,7 @@
       <p>批量使用菲律宾代理创建 PH/PHP Checkout，仅检测是否公开 GCash 渠道，不发起支付。</p>
     </header>
 
-    <section class="card mode-card" id="modeCard" hidden><div class="mode-note">访客模式需要 CDK</div><label id="cdkField">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>
+    {% if service_mode|default('self', true) == 'visitor' %}<section class="card mode-card" id="modeCard"><div class="mode-note">访客模式需要 CDK</div><label id="cdkField">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>{% endif %}
     <section class="card input-card">
       <div class="section-heading">
         <div><span class="section-kicker">01 · INPUT</span><h2>准备检测数据</h2></div>
@@ -27,7 +27,7 @@
       </div>
       <label class="check"><input id="withPromo" type="checkbox"> 同时携带优惠请求（不代表优惠资格）</label>
       <label class="channel-proxy-field">渠道专用代理（可选，未填写的渠道使用通用代理）<textarea id="channelProxies" placeholder="每行格式：渠道=代理；同一渠道可填写多行，例如：&#10;gcash=ph-gcash.example:8080:user:pass&#10;card=ph-card.example:8080:user:pass&#10;paypal=uk-paypal.example:8080:user:pass"></textarea></label>
-      <label class="preset-select">检测预设<select id="preset"><option value="gcash">菲律宾 / PHP / GCash</option><option value="card">菲律宾 / PHP / Card</option><option value="paypal_uk">英国 / GBP / PayPal</option><option value="ideal_nl">荷兰 / EUR / iDEAL</option><option value="momo_vn">越南 / VND / MoMo</option><option value="gopay_id">印度尼西亚 / IDR / GoPay</option><option value="custom">自定义渠道</option></select></label><fieldset class="channel-select"><legend>同时检测渠道</legend><label><input type="checkbox" name="channels" value="gcash" checked> GCash</label><label><input type="checkbox" name="channels" value="card"> Card</label><label><input type="checkbox" name="channels" value="paypal"> PayPal</label><label><input type="checkbox" name="channels" value="ideal"> iDEAL</label><label><input type="checkbox" name="channels" value="momo"> MoMo</label><label><input type="checkbox" name="channels" value="gopay"> GoPay</label></fieldset><label class="custom-channel">自定义渠道<input id="customChannel" value="gcash" placeholder="例如 card 或 gcash"></label><button id="start">开始批量检测</button>
+      <label class="preset-select">检测预设<select id="preset"><option value="gcash">菲律宾 / PHP / GCash</option><option value="card">菲律宾 / PHP / Card</option><option value="paypal_uk">英国 / GBP / PayPal</option><option value="ideal_nl">荷兰 / EUR / iDEAL</option><option value="momo_vn">越南 / VND / MoMo</option><option value="gopay_id">印度尼西亚 / IDR / GoPay</option><option value="custom">自定义渠道</option></select></label><label class="concurrency-select">并发数<input id="workers" type="number" min="1" max="32" value="4" inputmode="numeric"><span class="field-hint">同时检测的账号数量，最大 32</span></label><fieldset class="channel-select"><legend>同时检测渠道</legend><label><input type="checkbox" name="channels" value="gcash" checked> GCash</label><label><input type="checkbox" name="channels" value="card"> Card</label><label><input type="checkbox" name="channels" value="paypal"> PayPal</label><label><input type="checkbox" name="channels" value="ideal"> iDEAL</label><label><input type="checkbox" name="channels" value="momo"> MoMo</label><label><input type="checkbox" name="channels" value="gopay"> GoPay</label></fieldset><label class="custom-channel">自定义渠道<input id="customChannel" value="gcash" placeholder="例如 card 或 gcash"></label><button id="start">开始批量检测</button>
       <span id="message"></span>
     </section>
 
@@ -39,15 +39,15 @@
     </section>
 
     <section class="card" id="resultsCard" hidden>
-      <div class="toolbar"><h2>检测结果</h2><div class="toolbar-actions"><button id="copyQualified" type="button">复制全部有资格 Token</button><button id="export" type="button">导出 JSON</button></div></div>
+      <div class="toolbar"><h2>检测结果</h2><div class="toolbar-actions"><button id="copyQualified" type="button">复制全部成功 Token</button><button id="export" type="button">导出 JSON</button></div></div>
       <div class="qualified-actions">
         <label>自动提交 API 地址（仅在点击按钮后提交）<input id="submitEndpoint" type="url" placeholder="https://example.com/api/tokens" autocomplete="off"></label>
-        <button id="submitQualified" type="button">提交全部有资格 Token</button>
+        <button id="submitQualified" type="button">提交全部成功 Token</button>
         <span class="field-hint">请求体：{ "tokens": ["…"], "count": 1 }</span>
       </div>
       <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>账户详情</th><th>Checkout</th><th>币种</th><th>全部可用渠道</th></tr></thead><tbody id="results"></tbody></table></div>
     </section>
-  <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><p id="modalEmail"></p><label>Access Token<textarea id="modalToken" readonly></textarea></label><button id="copyModalToken">复制 AT</button></div></div>
+  <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><div class="modal-account"><span class="modal-account-label">邮箱</span><strong id="modalEmail"></strong></div><label>用户提交的行<textarea id="modalToken" readonly></textarea></label><button id="copyModalToken">复制</button></div></div>
   </main>
   <script src="/static/app.js"></script>
 </body>
