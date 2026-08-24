@@ -119,5 +119,14 @@ socks5://USERNAME:PASSWORD@host:1080
 ## 环境变量
 
 - `GCASH_MAX_BATCH`：单批最大数量，默认 100
-- `GCASH_WORKERS`：并发检测数，默认 4
+- `GCASH_WORKERS`：每个批次默认并发检测数，默认 4
+- `GCASH_MAX_WORKERS`：单进程允许的每批最大并发数，默认 32
 - `HOST`、`PORT`：监听地址，默认 `127.0.0.1:18097`
+
+批量接口可在请求体中传入 `workers` 覆盖本批次并发数，例如：
+
+```json
+{"tokens":["<JWT-1>","<JWT-2>"],"proxies":["proxy:8080"],"workers":16}
+```
+
+`workers` 必须在 `1` 到 `GCASH_MAX_WORKERS` 之间；任务提交后立即返回 `job_id`，通过批量状态接口轮询结果。

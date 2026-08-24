@@ -32,6 +32,17 @@ KNOWN_GCASH_METHOD_IDS = {
     "cpmt_1TOgstC6h1nxGoI3WUVEY2cJ",
 }
 
+STRIPE_API = "https://api.stripe.com"
+STRIPE_VERSION_BASE = "2025-03-31.basil"
+STRIPE_VERSION_FULL = (
+    "2025-03-31.basil; checkout_server_update_beta=v1; "
+    "checkout_manual_approval_preview=v1"
+)
+KNOWN_PUBLISHABLE_KEYS = {
+    "1Pj377KslHRdbaPg": "pk_live_51Pj377KslHRdbaPgTJYjThzH3f5dt1N1vK7LUp0qh0yNSarhfZ6nfbG7FFlh8KLxVkvdMWN5o6Mc4Vda6NHaSnaV00C2Sbl8Zs",
+    "1HOrSwC6h1nxGoI3": "pk_live_51HOrSwC6h1nxGoI3lTAgRjYVrz4dU3fVOabyCcKR3pbEJguCVAlqCxdxCUvoRh1XWwRacViovU3kLKvpkjh7IqkW00iXQsjo3n",
+}
+
 
 class GCashCheckerError(RuntimeError):
     pass
@@ -221,12 +232,26 @@ def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: d
     except Exception as exc:
         raise RuntimeError(f"Checkout 返回非 JSON：{text[:200]}") from exc
     raw = " ".join(str(data.get(k) or "") for k in ("checkout_session_id", "url")) + " " + text
-    match = re.search(r"oaics_[A-Za-z0-9]+", raw)
-    if not match:
-        raise GCashCheckerError("Checkout 未返回 OAICS 自定义会话")
-    sid = match.group(0)
+    custom_match = re.search(r"oaics_[A-Za-z0-9]+", raw)
+    stripe_match = re.search(r"cs_(?:live|test)_[A-Za-z0-9]+", raw)
     processor = str(data.get("processor_entity") or "openai_ie")
-    return http, {"checkout_session_id": sid, "processor_entity": processor}
+    if custom_match:
+        return http, {
+            "checkout_session_id": custom_match.group(0),
+            "processor_entity": processor,
+            "checkout_provider": str(data.get("checkout_provider") or "open_ai"),
+            "is_custom_checkout": True,
+            "publishable_key": str(data.get("publishable_key") or ""),
+        }
+    if stripe_match:
+        return http, {
+            "checkout_session_id": stripe_match.group(0),
+            "processor_entity": processor,
+            "checkout_provider": str(data.get("checkout_provider") or "stripe"),
+            "is_custom_checkout": False,
+            "publishable_key": str(data.get("publishable_key") or ""),
+        }
+    raise GCashCheckerError("Checkout 未返回可识别会话（oaics_ 或 cs_*）")
 
 
 def _fetch_state(http: Any, token: str, sid: str, processor: str, device_id: str) -> dict[str, Any]:
@@ -234,6 +259,112 @@ def _fetch_state(http: Any, token: str, sid: str, processor: str, device_id: str
     if response.status_code != 200:
         raise RuntimeError(f"读取 Checkout 失败：HTTP {response.status_code} {(response.text or '')[:200]}")
     return response.json() or {}
+
+
+def _stripe_headers() -> dict[str, str]:
+    return {"User-Agent": CHROME_UA, "Accept": "application/json", "Origin": "https://js.stripe.com", "Referer": "https://js.stripe.com/"}
+
+
+def _verify_stripe_pk(http: Any, session_id: str, preferred: str = "") -> str:
+    keys = [preferred] if preferred else []
+    keys.extend(pk for pk in KNOWN_PUBLISHABLE_KEYS.values() if pk and pk not in keys)
+    last = ""
+    for pk in keys:
+        try:
+            response = http.post(
+                f"{STRIPE_API}/v1/payment_pages/{session_id}/init",
+                data={"key": pk, "_stripe_version": STRIPE_VERSION_BASE, "browser_locale": "en-US"},
+                headers=_stripe_headers(), timeout=20,
+            )
+            if response.status_code == 200:
+                return pk
+            last = f"{response.status_code}: {(response.text or '')[:160]}"
+        except Exception as exc:
+            last = f"{type(exc).__name__}: {exc}"
+    raise RuntimeError(f"无法确认 Stripe publishable_key：{last}")
+
+
+def _stripe_payment_method_types(init_data: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").lower().strip()
+        if text and text not in found:
+            found.append(text)
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key in ("type", "name", "display_name", "payment_method_type", "provider", "id"):
+                add(value.get(key))
+            for nested_key in ("payment_method_types", "payment_method_specs", "ordered_payment_method_types", "external_payment_method_specs"):
+                nested = value.get(nested_key)
+                if nested is not value:
+                    walk(nested)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, str):
+            add(value)
+
+    for section_name in ("payment_method_types", "payment_method_types_preference", "payment_method_specs", "ordered_payment_method_types", "external_payment_method_specs"):
+        walk(init_data.get(section_name))
+    return found
+
+
+def _stripe_channel_available(methods: list[str], target: str) -> bool:
+    target = target.lower().strip()
+    aliases = {
+        "card": ("card", "link"),
+        "paypal": ("paypal",),
+        "ideal": ("ideal", "ideal_bank"),
+        "momo": ("momo",),
+        "gopay": ("gopay", "go_pay"),
+        "gcash": ("gcash",),
+        "twint": ("twint",),
+        "pix": ("pix",),
+        "upi": ("upi",),
+        "kakao": ("kakao", "kakaopay", "kakao_pay"),
+    }.get(target, (target,))
+    return any(any(alias in method for alias in aliases) for method in methods)
+
+
+def _fetch_stripe_checkout_state(http: Any, session_id: str, publishable_key: str, country: str) -> dict[str, Any]:
+    pk = _verify_stripe_pk(http, session_id, publishable_key)
+    country = country.upper()
+    profile_locale = {"GB": "en-GB", "NL": "nl-NL", "DE": "de-DE", "FR": "fr-FR", "US": "en-US", "PH": "en-PH", "VN": "vi-VN", "ID": "id-ID"}.get(country, "en-US")
+    timezone = {"GB": "Europe/London", "NL": "Europe/Amsterdam", "DE": "Europe/Berlin", "FR": "Europe/Paris", "PH": "Asia/Manila", "VN": "Asia/Ho_Chi_Minh", "ID": "Asia/Jakarta"}.get(country, "America/New_York")
+    last_error = ""
+    for version in (STRIPE_VERSION_BASE, STRIPE_VERSION_FULL):
+        data = {
+            "browser_locale": profile_locale,
+            "browser_timezone": timezone,
+            "elements_session_client[elements_init_source]": "custom_checkout",
+            "elements_session_client[referrer_host]": "chatgpt.com",
+            "elements_session_client[stripe_js_id]": str(uuid.uuid4()),
+            "elements_session_client[locale]": profile_locale,
+            "elements_session_client[is_aggregation_expected]": "false",
+            "key": pk,
+            "_stripe_version": version,
+        }
+        if version == STRIPE_VERSION_FULL:
+            data["elements_session_client[client_betas][0]"] = "custom_checkout_server_updates_1"
+            data["elements_session_client[client_betas][1]"] = "custom_checkout_manual_approval_1"
+        response = http.post(f"{STRIPE_API}/v1/payment_pages/{session_id}/init", data=data, headers=_stripe_headers(), timeout=30)
+        if response.status_code == 200:
+            payload = response.json() or {}
+            total = payload.get("total_summary") or {}
+            return {
+                "checkout_session_id": session_id,
+                "currency": str(payload.get("currency") or "").upper(),
+                "checkout_amount": total.get("due") if total.get("due") is not None else (payload.get("invoice") or {}).get("amount_due"),
+                "payment_method_types": _stripe_payment_method_types(payload),
+                "stripe_init": payload,
+            }
+        last_error = f"{response.status_code}: {(response.text or '')[:180]}"
+        if response.status_code == 400 and "beta" in (response.text or "").lower():
+            continue
+        break
+    raise RuntimeError(f"读取 Stripe Checkout 失败：{last_error}")
 
 
 def _amount(state: dict[str, Any]) -> Any:
@@ -250,6 +381,9 @@ def _currency(state: dict[str, Any]) -> str:
     for key in ("currency", "checkout_currency"):
         if state.get(key):
             return str(state[key]).upper()
+    init_currency = ((state.get("stripe_init") or {}) if isinstance(state.get("stripe_init"), dict) else {}).get("currency")
+    if init_currency:
+        return str(init_currency).upper()
     return "PHP"
 
 
@@ -344,11 +478,30 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
         try:
             device_id, did = str(uuid.uuid4()), str(uuid.uuid4())
             http, meta = _create_checkout(token, candidate, device_id, did, preset)
+            country = str(preset.get("country") or "PH").upper()
+            selected = [str(channel).lower() for channel in (target_channels or [target_channel]) if str(channel).strip()]
+            if str(meta.get("checkout_session_id") or "").startswith("cs_"):
+                state = _fetch_stripe_checkout_state(
+                    http, meta["checkout_session_id"], str(meta.get("publishable_key") or ""), country
+                )
+                channels = [str(method).lower() for method in (state.get("payment_method_types") or []) if str(method).strip()]
+                details = [{"name": method, "id": method, "raw_type": "stripe"} for method in channels]
+                availability = {channel: _stripe_channel_available(channels, channel) for channel in selected}
+                available = availability.get(target_channel, False)
+                details.append({"selected": availability, "checkout_provider": "stripe"})
+                return QualificationResult(
+                    available, meta["checkout_session_id"], target_channel,
+                    meta["processor_entity"] if available else "",
+                    target_channel if available else "", _amount(state), _currency(state), True,
+                    f"{target_channel} channel published (Stripe Checkout)" if available else f"{country} Stripe checkout 未发布 {target_channel}",
+                    channels, details, account_email, token,
+                )
+
             state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
             methods = state.get("custom_payment_methods")
             method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             for _ in range(3):
-                if method_id:
+                if method_id or (target_channel != "gcash" and _channel_available(methods, target_channel)):
                     break
                 await_seconds = 0.8
                 import time
@@ -358,11 +511,9 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                 method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             channels = _available_channels(state.get("custom_payment_methods"))
             details = _channel_details(state.get("custom_payment_methods"))
-            selected = [str(channel).lower() for channel in (target_channels or [target_channel]) if str(channel).strip()]
             availability = {channel: (_channel_available(state.get("custom_payment_methods"), channel) if channel != "gcash" else bool(_gcash_method(state.get("custom_payment_methods")))) for channel in selected}
             available = availability.get(target_channel, False)
-            country = str(preset.get("country") or "PH").upper()
-            details.append({"selected": availability})
+            details.append({"selected": availability, "checkout_provider": "open_ai"})
             return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, account_email, token)
         except Exception as exc:
             last_error = exc

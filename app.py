@@ -34,8 +34,11 @@ def _load_mode() -> str:
 
 service_mode = {"mode": _load_mode()}
 MAX_BATCH = max(1, int(os.getenv("GCASH_MAX_BATCH", "100")))
+# GCASH_WORKERS is the default per-job concurrency. Keep a larger shared pool so
+# a request can opt into higher concurrency without creating an executor per job.
 WORKERS = max(1, int(os.getenv("GCASH_WORKERS", "4")))
-executor = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="gcash-check")
+MAX_WORKERS = max(WORKERS, int(os.getenv("GCASH_MAX_WORKERS", "32")))
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="gcash-check")
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.RLock()
 
@@ -49,6 +52,7 @@ def safe_result(result: Any, visitor: bool = False) -> dict[str, Any]:
     if visitor:
         data.pop("access_token", None)
         data.pop("account_email", None)
+        data.pop("submitted_row", None)
     return data
 
 
@@ -84,6 +88,8 @@ def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, tar
         try:
             result = check_gcash(item["token"], candidate, with_promo=with_promo, target_channel=target_channel, preset=preset, target_channels=channels)
             row = {"index": index, "ok": True, **safe_result(result, visitor)}
+            if not visitor:
+                row["submitted_row"] = item["token"]
             break
         except GCashCheckerError as exc:
             last_error = exc
@@ -107,6 +113,11 @@ def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, tar
         if job["completed"] >= job["total"]:
             job["status"] = "completed"
             job["finished_at"] = now()
+
+
+def run_one_limited(semaphore: threading.BoundedSemaphore, *args: Any) -> None:
+    with semaphore:
+        run_one(*args)
 
 
 def parse_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -150,7 +161,11 @@ def parse_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    # Pass the resolved mode to the template so self-deployed pages do not
+    # include visitor-only CDK UI at all.
+    with mode_lock:
+        mode = service_mode["mode"]
+    return render_template("index.html", service_mode=mode)
 
 
 @app.get("/admin")
@@ -285,6 +300,12 @@ def create_batch():
         return jsonify({"ok": False, "error": "请至少输入一条 Token"}), 400
     if len(items) > MAX_BATCH:
         return jsonify({"ok": False, "error": f"单批最多 {MAX_BATCH} 条"}), 400
+    try:
+        requested_workers = int(payload.get("workers") or WORKERS)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "workers 必须是整数"}), 400
+    if requested_workers < 1 or requested_workers > MAX_WORKERS:
+        return jsonify({"ok": False, "error": f"workers 范围为 1-{MAX_WORKERS}"}), 400
     job_id = uuid.uuid4().hex
     job = {
         "job_id": job_id, "status": "running", "total": len(items), "completed": 0,
@@ -306,10 +327,14 @@ def create_batch():
             return jsonify({"ok": False, "error": str(exc)}), 403
     preset_name, preset = resolve_preset(payload)
     target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
+    # Submit one task per item. The process-wide executor bounds total load;
+    # the per-job semaphore enforces the requested concurrency.
+    job["workers"] = min(requested_workers, len(items))
+    semaphore = threading.BoundedSemaphore(job["workers"])
+    channels = [str(channel).lower() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
     for index, item in enumerate(items):
-        channels = [str(channel).lower() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
-        executor.submit(run_one, job_id, index, item, with_promo, target_channel, preset, visitor, channels)
-    return jsonify({"ok": True, "job_id": job_id, "total": len(items)})
+        executor.submit(run_one_limited, semaphore, job_id, index, item, with_promo, target_channel, preset, visitor, channels)
+    return jsonify({"ok": True, "job_id": job_id, "total": len(items), "workers": job["workers"]})
 
 
 @app.get("/api/gcash/batch/<job_id>")
