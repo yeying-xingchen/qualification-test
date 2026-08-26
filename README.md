@@ -1,21 +1,21 @@
-# GCash 资格检测 GUI
+# 支付渠道资格检测 GUI
 
-独立的批量 GCash qualification checker，不依赖其他项目目录。
+独立的批量 Checkout 支付渠道资格检测工具，不依赖其他项目目录。
 
 Sentinel 运行时需要 Node.js 18+ 和本地 `jsdom` 依赖；首次安装请执行 `npm install`。
 
 ## 功能
 
-- 使用 PH/PHP Checkout 检测是否发布 GCash 渠道
-- 输出 Checkout 返回的全部可用支付渠道，并单独标记 `gcash_available`
+- 按国家和币种创建 Checkout，检测是否发布所选支付渠道
+- 输出 Checkout 返回的全部可用支付渠道，并单独标记目标渠道是否可用
 - GCash 资格只认定 `cpmt_1TOgstC6h1nxGoI3WUVEY2cJ`，其他支付方式不会判定为 GCash
-- GUI 内置预设：菲律宾 GCash、菲律宾 Card、英国 PayPal、荷兰 iDEAL、越南 MoMo
+- GUI 内置预设：菲律宾 GCash、菲律宾 Card、英国 PayPal、荷兰 iDEAL、越南 MoMo、印度尼西亚 GoPay、印度 UPI、波兰 BLIK
 - 支持批量 Token 和代理
 - 支持按渠道单独配置代理，未配置渠道自动回退到通用代理池
 - 支持原始 JWT，以及 `email----...----JWT` 整行账号格式
 - 支持 `host:port:user:password`、`curl -x/-U`、HTTP/HTTPS、SOCKS5/SOCKS5H 代理
 - 代理池轮询复用；代理隧道失败时自动尝试备用入口
-- 只读取 Checkout 支付方式，不调用 confirm/start，不发起实际支付
+- 只读取 Checkout 支付方式，不调用 confirm/start，不发起实际支付；波兰 BLIK 使用波兰出口代理
 
 ## 启动
 
@@ -74,7 +74,7 @@ Content-Type: application/json
 }
 ```
 
-支持预设：`gcash`、`card`、`paypal_uk`、`ideal_nl`、`momo_vn`。响应中的 `channel_details` 会包含 OpenAI Checkout 返回的渠道名称、ID 和原始类型。
+支持预设：`gcash`、`card`、`paypal_uk`、`ideal_nl`、`momo_vn`、`gopay_id`、`upi_in`、`blik_pl`。波兰 BLIK 使用 `PL` / `PLN` 创建 Checkout；响应中的 `channel_details` 会包含 OpenAI Checkout 返回的渠道名称、ID 和原始类型。
 
 批量检测仍使用 `POST /api/gcash/batch`，任务状态使用 `GET /api/gcash/batch/<job_id>`。除传统 `proxies` 外，也可传入按渠道配置的 `channel_proxies`：
 
@@ -88,7 +88,7 @@ Content-Type: application/json
 
 批量检测完成后，结果区域提供两个操作：
 
-- **复制全部有资格 Token**：只提取检测结果中 `ok=true` 且 `qualified=true` 的 Access Token，并按每行一个 Token 的格式复制到剪贴板。
+- **复制全部有资格 Token**：提取检测结果中至少有一个已选渠道可用（`ok=true` 且任意已选渠道可用）的 Access Token，并按每行一个 Token 的格式复制到剪贴板。
 - **提交全部有资格 Token**：填写目标 API 地址后，手动点击提交按钮，将全部有资格 Token 通过 `POST` 请求发送到目标 API。系统不会在检测完成后自动提交。
 
 目标 API 请求格式：

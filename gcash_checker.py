@@ -63,13 +63,14 @@ class QualificationResult:
     channel_details: list[dict[str, Any]] = field(default_factory=list)
     account_email: str = ""
     access_token: str = ""
+    country: str = "PH"
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "qualified": self.qualified,
             "channel": self.target_channel,
             "target_channel": self.target_channel,
-            "country": "PH",
+            "country": self.country,
             "currency": self.checkout_currency or "PHP",
             "checkout_session_id": self.checkout_session_id,
             "processor_entity": self.processor_entity,
@@ -115,7 +116,7 @@ def extract_access_token(value: str) -> str:
 def _proxy(value: str) -> str:
     value = str(value or "").strip()
     if not value:
-        raise GCashCheckerError("必须提供菲律宾出口代理")
+        raise GCashCheckerError("必须提供目标国家出口代理")
     try:
         parts = shlex.split(value)
     except ValueError as exc:
@@ -217,7 +218,7 @@ def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: d
         pass
     sentinel = asyncio.run(_sentinel_headers(proxy, device_id, did))
     country = str(preset.get("country") or "PH").upper()
-    currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP"}.get(country, "USD")).upper()
+    currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP", "IN": "INR", "PL": "PLN"}.get(country, "USD")).upper()
     payload = {
         "entry_point": "all_plans_pricing_modal", "plan_name": str(preset.get("plan_name") or "chatgptplusplan"),
         "billing_details": {"country": country, "currency": currency},
@@ -313,6 +314,10 @@ def _stripe_payment_method_types(init_data: dict[str, Any]) -> list[str]:
 
 def _stripe_channel_available(methods: list[str], target: str) -> bool:
     target = target.lower().strip()
+    # Stripe publishes BLIK as the exact `blik` payment method type. Accept
+    # the occasional `blik_bank` alias, but avoid matching incidental labels.
+    if target == "blik":
+        return any(str(method).lower().strip() in {"blik", "blik_bank"} for method in methods)
     aliases = {
         "card": ("card", "link"),
         "paypal": ("paypal",),
@@ -323,6 +328,7 @@ def _stripe_channel_available(methods: list[str], target: str) -> bool:
         "twint": ("twint",),
         "pix": ("pix",),
         "upi": ("upi",),
+        "blik": ("blik",),
         "kakao": ("kakao", "kakaopay", "kakao_pay"),
     }.get(target, (target,))
     return any(any(alias in method for alias in aliases) for method in methods)
@@ -331,8 +337,8 @@ def _stripe_channel_available(methods: list[str], target: str) -> bool:
 def _fetch_stripe_checkout_state(http: Any, session_id: str, publishable_key: str, country: str) -> dict[str, Any]:
     pk = _verify_stripe_pk(http, session_id, publishable_key)
     country = country.upper()
-    profile_locale = {"GB": "en-GB", "NL": "nl-NL", "DE": "de-DE", "FR": "fr-FR", "US": "en-US", "PH": "en-PH", "VN": "vi-VN", "ID": "id-ID"}.get(country, "en-US")
-    timezone = {"GB": "Europe/London", "NL": "Europe/Amsterdam", "DE": "Europe/Berlin", "FR": "Europe/Paris", "PH": "Asia/Manila", "VN": "Asia/Ho_Chi_Minh", "ID": "Asia/Jakarta"}.get(country, "America/New_York")
+    profile_locale = {"GB": "en-GB", "NL": "nl-NL", "DE": "de-DE", "FR": "fr-FR", "US": "en-US", "PH": "en-PH", "VN": "vi-VN", "ID": "id-ID", "IN": "en-IN", "PL": "pl-PL"}.get(country, "en-US")
+    timezone = {"GB": "Europe/London", "NL": "Europe/Amsterdam", "DE": "Europe/Berlin", "FR": "Europe/Paris", "PH": "Asia/Manila", "VN": "Asia/Ho_Chi_Minh", "ID": "Asia/Jakarta", "IN": "Asia/Kolkata", "PL": "Europe/Warsaw"}.get(country, "America/New_York")
     last_error = ""
     for version in (STRIPE_VERSION_BASE, STRIPE_VERSION_FULL):
         data = {
@@ -431,10 +437,30 @@ def _available_channels(methods: Any) -> list[str]:
     return channels
 
 
+def _blik_method(methods: Any) -> str:
+    """Return a textual BLIK method identifier without guessing cpmt IDs."""
+    if not isinstance(methods, list):
+        return ""
+    blik_values = {"blik", "blik_bank"}
+    fields = ("type", "payment_method_type", "provider", "name", "display_name", "label")
+    for method in methods:
+        if isinstance(method, str) and method.lower().strip() in blik_values:
+            return method.strip()
+        if not isinstance(method, dict):
+            continue
+        for field_name in fields:
+            value = str(method.get(field_name) or "").lower().strip()
+            if value in blik_values:
+                return str(method.get("id") or method.get(field_name) or "blik")
+    return ""
+
+
 def _channel_available(methods: Any, target: str) -> bool:
     target = target.lower().strip()
     if target == "gcash":
         return bool(_gcash_method(methods))
+    if target == "blik":
+        return bool(_blik_method(methods))
     if target == "card":
         return any(
             isinstance(method, dict)
@@ -494,7 +520,7 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                     meta["processor_entity"] if available else "",
                     target_channel if available else "", _amount(state), _currency(state), True,
                     f"{target_channel} channel published (Stripe Checkout)" if available else f"{country} Stripe checkout 未发布 {target_channel}",
-                    channels, details, account_email, token,
+                    channels, details, account_email, token, country,
                 )
 
             state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
@@ -514,7 +540,7 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
             availability = {channel: (_channel_available(state.get("custom_payment_methods"), channel) if channel != "gcash" else bool(_gcash_method(state.get("custom_payment_methods")))) for channel in selected}
             available = availability.get(target_channel, False)
             details.append({"selected": availability, "checkout_provider": "open_ai"})
-            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, account_email, token)
+            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, account_email, token, country)
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):

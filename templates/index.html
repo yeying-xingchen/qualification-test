@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>GCash Qualification</title>
+  <title>Payment Channel Qualification</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body data-service-mode="{{ service_mode|default('self', true) }}">
   <main class="shell">
     <div class="home-admin-link"><a href="/admin">管理员后台</a></div>
     <header>
-      <div class="eyebrow">PHILIPPINES · CHECKOUT QUALIFICATION</div>
-      <h1>GCash 资格检测</h1>
-      <p>批量使用菲律宾代理创建 PH/PHP Checkout，仅检测是否公开 GCash 渠道，不发起支付。</p>
+      <div class="eyebrow">MULTI-REGION · CHECKOUT QUALIFICATION</div>
+      <h1>支付渠道资格检测</h1>
+      <p>批量使用目标国家代理创建对应 Checkout，仅检测是否公开所选支付渠道，不发起支付。</p>
     </header>
 
     {% if service_mode|default('self', true) == 'visitor' %}<section class="card mode-card" id="modeCard"><div class="mode-note">访客模式需要 CDK</div><label id="cdkField">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>{% endif %}
@@ -27,14 +27,14 @@
       </div>
       <label class="check"><input id="withPromo" type="checkbox"> 同时携带优惠请求（不代表优惠资格）</label>
       <label class="channel-proxy-field">渠道专用代理（可选，未填写的渠道使用通用代理）<textarea id="channelProxies" placeholder="每行格式：渠道=代理；同一渠道可填写多行，例如：&#10;gcash=ph-gcash.example:8080:user:pass&#10;card=ph-card.example:8080:user:pass&#10;paypal=uk-paypal.example:8080:user:pass"></textarea></label>
-      <label class="preset-select">检测预设<select id="preset"><option value="gcash">菲律宾 / PHP / GCash</option><option value="card">菲律宾 / PHP / Card</option><option value="paypal_uk">英国 / GBP / PayPal</option><option value="ideal_nl">荷兰 / EUR / iDEAL</option><option value="momo_vn">越南 / VND / MoMo</option><option value="gopay_id">印度尼西亚 / IDR / GoPay</option><option value="custom">自定义渠道</option></select></label><label class="concurrency-select">并发数<input id="workers" type="number" min="1" max="32" value="4" inputmode="numeric"><span class="field-hint">同时检测的账号数量，最大 32</span></label><fieldset class="channel-select"><legend>同时检测渠道</legend><label><input type="checkbox" name="channels" value="gcash" checked> GCash</label><label><input type="checkbox" name="channels" value="card"> Card</label><label><input type="checkbox" name="channels" value="paypal"> PayPal</label><label><input type="checkbox" name="channels" value="ideal"> iDEAL</label><label><input type="checkbox" name="channels" value="momo"> MoMo</label><label><input type="checkbox" name="channels" value="gopay"> GoPay</label></fieldset><label class="custom-channel">自定义渠道<input id="customChannel" value="gcash" placeholder="例如 card 或 gcash"></label><button id="start">开始批量检测</button>
+      <label class="preset-select">检测预设<select id="preset"><option value="gcash">菲律宾 / PHP / GCash</option><option value="card">菲律宾 / PHP / Card</option><option value="paypal_uk">英国 / GBP / PayPal</option><option value="ideal_nl">荷兰 / EUR / iDEAL</option><option value="momo_vn">越南 / VND / MoMo</option><option value="gopay_id">印度尼西亚 / IDR / GoPay</option><option value="upi_in">印度 / INR / UPI</option><option value="blik_pl">波兰 / PLN / BLIK</option><option value="custom">自定义渠道</option></select></label><label class="concurrency-select">并发数<input id="workers" type="number" min="1" max="32" value="4" inputmode="numeric"><span class="field-hint">同时检测的账号数量，最大 32</span></label><fieldset class="channel-select"><legend>同时检测渠道</legend><label><input type="checkbox" name="channels" value="gcash" checked> GCash</label><label><input type="checkbox" name="channels" value="card"> Card</label><label><input type="checkbox" name="channels" value="paypal"> PayPal</label><label><input type="checkbox" name="channels" value="ideal"> iDEAL</label><label><input type="checkbox" name="channels" value="momo"> MoMo</label><label><input type="checkbox" name="channels" value="gopay"> GoPay</label><label><input type="checkbox" name="channels" value="upi"> UPI</label><label><input type="checkbox" name="channels" value="blik"> BLIK</label></fieldset><label class="custom-channel">自定义渠道<input id="customChannel" value="gcash" placeholder="例如 card 或 gcash"></label><button id="start">开始批量检测</button>
       <span id="message"></span>
     </section>
 
     <section class="card stats" id="stats" hidden>
       <div><b id="total">0</b><span>总数</span></div>
       <div><b id="completed">0</b><span>已完成</span></div>
-      <div><b id="qualified">0</b><span>发现 GCash</span></div>
+      <div><b id="qualified">0</b><span>有资格</span></div>
       <div><b id="failed">0</b><span>失败</span></div>
     </section>
 

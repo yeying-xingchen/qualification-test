@@ -251,6 +251,8 @@ BUILTIN_PRESETS = {
     "ideal_nl": {"channel": "ideal", "country": "NL", "currency": "EUR", "plan": "plus"},
     "momo_vn": {"channel": "momo", "country": "VN", "currency": "VND", "plan": "plus"},
     "gopay_id": {"channel": "gopay", "country": "ID", "currency": "IDR", "plan": "plus"},
+    "upi_in": {"channel": "upi", "country": "IN", "currency": "INR", "plan": "plus"},
+    "blik_pl": {"channel": "blik", "country": "PL", "currency": "PLN", "plan": "plus"},
 }
 
 
@@ -331,7 +333,11 @@ def create_batch():
     # the per-job semaphore enforces the requested concurrency.
     job["workers"] = min(requested_workers, len(items))
     semaphore = threading.BoundedSemaphore(job["workers"])
-    channels = [str(channel).lower() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
+    channels = [str(channel).lower().strip() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
+    # Always include the primary preset channel even when the UI sends a
+    # different set of optional comparison channels.
+    if target_channel not in channels:
+        channels.insert(0, target_channel)
     for index, item in enumerate(items):
         executor.submit(run_one_limited, semaphore, job_id, index, item, with_promo, target_channel, preset, visitor, channels)
     return jsonify({"ok": True, "job_id": job_id, "total": len(items), "workers": job["workers"]})
