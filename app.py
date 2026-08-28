@@ -235,9 +235,9 @@ def _region_result(region: dict[str, Any], result: Any, visitor: bool) -> dict[s
         "checkout_amount": data.get("checkout_amount"),
         "proxy_configured": data.get("proxy_configured", True),
         "evidence": data.get("evidence", ""),
-        "available_channels": data.get("available_channels") or [],
-        "channel_details": data.get("channel_details") or [],
-        "channel_availability": data.get("channel_availability") or {},
+        "available_channels": data.get("available_channels") if isinstance(data.get("available_channels"), list) else [],
+        "channel_details": data.get("channel_details") if isinstance(data.get("channel_details"), list) else [],
+        "channel_availability": data.get("channel_availability") if isinstance(data.get("channel_availability"), dict) else {},
         "error": "",
     }
     if not visitor:
@@ -273,16 +273,25 @@ def _aggregate_row(index: int, region_rows: list[dict[str, Any]], visitor: bool,
         }
     selected: dict[str, bool] = {}
     for r in succeeded:
-        for channel, value in (r.get("channel_availability") or {}).items():
+        availability = r.get("channel_availability")
+        if not isinstance(availability, dict):
+            availability = {}
+        for channel, value in availability.items():
             selected[str(channel)] = bool(selected.get(str(channel)) or value)
     available: list[str] = []
     details: list[Any] = []
     for r in succeeded:
         tag = str(r.get("name") or r.get("channel") or "")
-        for channel in r.get("available_channels") or []:
+        region_channels = r.get("available_channels")
+        region_details = r.get("channel_details")
+        if not isinstance(region_channels, list):
+            region_channels = []
+        if not isinstance(region_details, list):
+            region_details = []
+        for channel in region_channels:
             if str(channel).lower() not in {str(c).lower() for c in available}:
                 available.append(channel)
-        for detail in r.get("channel_details") or []:
+        for detail in region_details:
             if isinstance(detail, dict) and isinstance(detail.get("selected"), dict):
                 continue
             entry = dict(detail) if isinstance(detail, dict) else detail
@@ -444,9 +453,11 @@ def parse_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not proxies and not channel_proxies:
         return [{"token": token, "proxy": "", "proxies": [], "channel_proxies": {}} for token in tokens]
     # Keep the whole pool on every item so a failed tunnel can be retried with
-    # another proxy; the first proxy is still assigned round-robin.
-    proxy_cycle = cycle(proxies)
-    return [{"token": token, "proxy": next(proxy_cycle), "proxies": proxies, "channel_proxies": channel_proxies} for token in tokens]
+    # another proxy; the first proxy is still assigned round-robin. When no
+    # general proxy is configured but channel proxies exist, leave the generic
+    # slot empty (each channel still resolves its own proxy later).
+    proxy_cycle = cycle(proxies) if proxies else None
+    return [{"token": token, "proxy": next(proxy_cycle) if proxy_cycle else "", "proxies": proxies, "channel_proxies": channel_proxies} for token in tokens]
 
 
 @app.get("/")
