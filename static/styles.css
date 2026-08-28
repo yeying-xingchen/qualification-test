@@ -17,3 +17,10 @@
 
 /* Specific failure reason column: allow long error text to wrap instead of stretching the table */
 .err-col{min-width:200px;max-width:340px;overflow-wrap:anywhere;word-break:break-word}
+
+.modal-copy-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}.modal-copy-row .field-hint{font-weight:500}.modal-panel textarea#modalAT{display:block;width:100.modal-copy-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+.modal-copy-row .field-hint{font-weight:500}
+.modal-panel textarea#modalAT{display:block;width:100%;max-width:100%;min-width:0;min-height:90px;max-height:26vh;overflow:auto;overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap}
+.modal-panel #copyModalAT{background:#263748;color:#d8e6f1;font-size:13px;padding:9px 13px}
+.modal-panel #copyModalAT:hover{filter:brightness(1.15)}
+.retry-btn{background:#263748;color:#d8e6f1;font-size:12px;padding:5px 10px;border:1px solid #3a4a5c;border-radius:6px;cursor:pointer;white-space:nowrap}.retry-btn:hover{filter:brightness(1.2)}

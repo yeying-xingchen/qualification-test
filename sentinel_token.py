@@ -704,7 +704,10 @@ class SentinelTokenProvider:
                 resp = await s.post(url, data=body, headers={
                     "content-type": "text/plain;charset=UTF-8",
                     "referer": self.FRAME_REFERER,
-                }, cookies=self._cookies)
+                }, cookies=self._cookies, timeout=30)
+                if resp.status_code != 200:
+                    # 代理/后端拒绝时透传真实响应（如 403 forbidden ip=...）
+                    return {"error": f"HTTP {resp.status_code}: {(resp.text or '')[:200]}", "p": proof}
                 return resp.json()
             except Exception as e:
                 if attempt >= 2:

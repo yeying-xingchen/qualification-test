@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-let current = null, lastResults = [], pollTimer = null, batchStartTime = null;
+let current = null, lastResults = [], pollTimer = null, batchStartTime = null, lastJobId = null;
 
 /* ─── helpers ─── */
 
@@ -55,6 +55,7 @@ const REGION_META = {
   gcash:     { label: '菲律宾·GCash',     channel: 'gcash',   country: 'PH', currency: 'PHP' },
   card:      { label: '菲律宾·Card',      channel: 'card',    country: 'PH', currency: 'PHP' },
   paypal_uk: { label: '英国·PayPal',      channel: 'paypal',  country: 'GB', currency: 'GBP' },
+  paypal_nl: { label: '荷兰·PayPal',      channel: 'paypal',  country: 'NL', currency: 'EUR' },
   ideal_nl:  { label: '荷兰·iDEAL',       channel: 'ideal',   country: 'NL', currency: 'EUR' },
   momo_vn:   { label: '越南·MoMo',        channel: 'momo',    country: 'VN', currency: 'VND' },
   gopay_id:  { label: '印度尼西亚·GoPay', channel: 'gopay',   country: 'ID', currency: 'IDR' },
@@ -158,7 +159,7 @@ function render(data) {
   lastResults = rows;
 
   $('results').innerHTML = data.results.map((x, i) => {
-    if (!x) return `<tr><td>${i + 1}</td><td colspan="6">检测中…</td></tr>`;
+    if (!x) return `<tr><td>${i + 1}</td><td colspan="7">检测中…</td></tr>`;
     const badges = regionBadges(x);
     let state;
     if (badges) state = badges;
@@ -173,7 +174,10 @@ function render(data) {
       ? `<button class="copy detail-btn" data-email="${esc(x.account_email)}" data-token="${esc(x.access_token || '')}" data-submitted="${esc(x.submitted_row || x.access_token || '')}">查看详情</button>`
       : '-';
     const err = errorText(x);
-    return `<tr><td>${i + 1}</td><td>${state}</td><td>${detail}</td><td>${esc(x.checkout_session_id || '-')}</td><td>${esc(x.currency || '-')}</td><td>${esc(channelText || x.evidence || '-')}</td><td class="err-col">${err ? `<span class="err">${esc(err)}</span>` : '-'}</td></tr>`;
+    const retryBtn = data.status === 'completed'
+      ? `<button class="retry-btn" data-index="${i}" type="button">重试</button>`
+      : '';
+    return `<tr><td>${i + 1}</td><td>${state}</td><td>${detail}</td><td>${esc(x.checkout_session_id || '-')}</td><td>${esc(x.currency || '-')}</td><td>${esc(channelText || x.evidence || '-')}</td><td class="err-col">${err ? `<span class="err">${esc(err)}</span>` : '-'}</td><td>${retryBtn}</td></tr>`;
   }).join('');
 }
 
@@ -292,6 +296,7 @@ if (start) start.onclick = async () => {
     return;
   }
   const workers = Math.max(1, Math.min(32, Number.parseInt($('workers')?.value || '4', 10) || 4));
+  const retries = Math.max(1, Math.min(20, Number.parseInt($('retries')?.value || '2', 10) || 2));
   const primary = regions[0];
   const customRegion = regions.find(r => r.preset === 'custom');
 
@@ -302,7 +307,7 @@ if (start) start.onclick = async () => {
 
   try {
     const body = {
-      tokens, proxies, channel_proxies, workers,
+      tokens, proxies, channel_proxies, workers, retries,
       with_promo: $('withPromo').checked,
       visitor: false,
       cdk: $('cdk')?.value?.trim() || '',
@@ -322,6 +327,7 @@ if (start) start.onclick = async () => {
     if (!r.ok) throw Error(d.error || '提交失败');
 
     current = d.job_id;
+    lastJobId = d.job_id;
     batchStartTime = Date.now();
     if (elapsedLabel) { elapsedLabel.hidden = false; elapsedLabel.textContent = '0秒'; }
     setMessage(`已提交 ${d.total} 条，开始检测…`);
@@ -334,13 +340,45 @@ if (start) start.onclick = async () => {
 
 if (stopBtn) stopBtn.onclick = stopPollingUI;
 
+/* ─── single-row retry ─── */
+
+async function retryRow(index) {
+  if (!lastJobId) { setMessage('当前没有可重试的已完成任务'); return; }
+  try {
+    const r = await fetch(`/api/gcash/batch/${lastJobId}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index })
+    });
+    const d = await r.json();
+    if (!r.ok) throw Error(d.error || '重试提交失败');
+    // Resume polling the same job: the row will show "检测中…" until the retry
+    // writes its result back in place, then the job returns to completed.
+    current = lastJobId;
+    batchStartTime = Date.now();
+    if (elapsedLabel) { elapsedLabel.hidden = false; elapsedLabel.textContent = '0秒'; }
+    if (stopBtn) stopBtn.hidden = false;
+    setMessage(`↻ 正在重试第 ${index + 1} 条…`);
+    poll();
+  } catch (e) {
+    setMessage(`❌ 重试失败：${e.message}`);
+  }
+}
+
 /* ─── modal ─── */
 
 const modal = $('accountModal');
 document.addEventListener('click', e => {
+  const retry = e.target.closest('.retry-btn');
+  if (retry) {
+    const index = Number.parseInt(retry.dataset.index, 10);
+    if (Number.isInteger(index)) retryRow(index);
+    return;
+  }
   const detail = e.target.closest('.detail-btn');
   if (detail) {
     $('modalEmail').textContent = detail.dataset.email || '';
+    $('modalAT').value = detail.dataset.token || '';
     $('modalToken').value = detail.dataset.submitted || detail.dataset.token || '';
     modal.removeAttribute('hidden');
     modal.classList.add('open');
@@ -351,34 +389,20 @@ document.addEventListener('click', e => {
     modal.setAttribute('hidden', '');
     return;
   }
+  if (e.target.closest('#copyModalAT')) {
+    const button = e.target.closest('#copyModalAT');
+    const text = $('modalAT').value || '';
+    const done = () => { button.textContent = '已复制'; setTimeout(() => button.textContent = '一键复制 AT', 1200); };
+    if (!text) { setMessage('没有可复制的 Access Token'); return; }
+    copyText(text).then(done).catch(err => setMessage(err.message));
+    return;
+  }
   if (e.target.closest('#copyModalToken')) {
     const button = e.target.closest('#copyModalToken');
     const text = $('modalToken').value || '';
     const done = () => { button.textContent = '已复制'; setTimeout(() => button.textContent = '复制', 1200); };
-    const fallback = () => {
-      const area = document.createElement('textarea');
-      area.value = text;
-      area.setAttribute('readonly', '');
-      area.style.position = 'fixed';
-      area.style.left = '-9999px';
-      area.style.top = '0';
-      document.body.appendChild(area);
-      area.focus();
-      area.select();
-      area.setSelectionRange(0, area.value.length);
-      let copied = false;
-      try { copied = document.execCommand('copy'); } finally { area.remove(); }
-      if (!copied) throw Error('浏览器拒绝了复制操作，请手动选择内容');
-      return copied;
-    };
     if (!text) { setMessage('没有可复制的内容'); return; }
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(done).catch(() => {
-        try { fallback(); done(); } catch (err) { setMessage(err.message); }
-      });
-    } else {
-      try { fallback(); done(); } catch (err) { setMessage(err.message); }
-    }
+    copyText(text).then(done).catch(err => setMessage(err.message));
   }
 });
 
@@ -393,26 +417,47 @@ function qualifiedTokens() {
     .filter(x => x && !seen.has(x) && seen.add(x));
 }
 
+function copyViaTextarea(text) {
+  // Create a tiny invisible textarea, select its content and fire execCommand.
+  // Must run synchronously inside the click gesture: Chrome drops the transient
+  // user activation once an await / microtask boundary is crossed, and then
+  // both execCommand('copy') and the Clipboard API get rejected.
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '0';
+  area.style.left = '0';
+  area.style.width = '2px';
+  area.style.height = '2px';
+  area.style.opacity = '0';
+  area.style.border = '0';
+  area.style.padding = '0';
+  area.style.background = 'transparent';
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  area.setSelectionRange(0, area.value.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } finally { area.remove(); }
+  return ok;
+}
+
 function copyText(text) {
-  if (!text) return Promise.reject(new Error('没有可复制的有资格 Token'));
-  const fallback = () => {
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.setAttribute('readonly', '');
-    area.style.position = 'fixed';
-    area.style.left = '-9999px';
-    area.style.top = '0';
-    document.body.appendChild(area);
-    area.focus();
-    area.select();
-    area.setSelectionRange(0, area.value.length);
-    let copied = false;
-    try { copied = document.execCommand('copy'); } finally { area.remove(); }
-    if (!copied) throw new Error('浏览器拒绝了复制操作，请手动复制结果');
-  };
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).catch(fallback);
-  fallback();
-  return Promise.resolve();
+  if (!text) return Promise.reject(new Error('没有可复制的内容'));
+  // 1) Synchronous execCommand first — works on insecure origins and in
+  //    sandboxed iframes where navigator.clipboard is unavailable/blocked.
+  try {
+    if (copyViaTextarea(text)) return Promise.resolve();
+  } catch (e) { /* fall through to the async API */ }
+  // 2) Async Clipboard API (secure contexts, allowed permission policy).
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(
+      () => true,
+      () => { throw new Error('复制被浏览器阻止，请手动选中后复制'); }
+    );
+  }
+  return Promise.reject(new Error('复制被浏览器阻止，请手动选中后复制'));
 }
 
 const copyQualified = $('copyQualified');

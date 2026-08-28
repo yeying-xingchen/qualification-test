@@ -11,11 +11,12 @@ import json
 import os
 import re
 import shlex
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote
 import base64
 
 from curl_cffi import requests
@@ -42,6 +43,25 @@ KNOWN_PUBLISHABLE_KEYS = {
     "1Pj377KslHRdbaPg": "pk_live_51Pj377KslHRdbaPgTJYjThzH3f5dt1N1vK7LUp0qh0yNSarhfZ6nfbG7FFlh8KLxVkvdMWN5o6Mc4Vda6NHaSnaV00C2Sbl8Zs",
     "1HOrSwC6h1nxGoI3": "pk_live_51HOrSwC6h1nxGoI3lTAgRjYVrz4dU3fVOabyCcKR3pbEJguCVAlqCxdxCUvoRh1XWwRacViovU3kLKvpkjh7IqkW00iXQsjo3n",
 }
+
+# Per-proxy HTTP session pool and Sentinel identity cache. Both live on the
+# single asyncio event loop that app.py runs, so no lock is needed as long as
+# only that loop touches them. Sessions reuse the TLS connection to the target
+# proxy; the Sentinel identity (device id + token pair) is expensive to
+# generate (PoW + VM proof) and can be safely reused for a short window for
+# every checkout that exits through the same proxy.
+_ASYNC_SESSIONS: dict[str, "requests.AsyncSession"] = {}
+_SENTINEL_CACHE: dict[str, dict[str, Any]] = {}
+# Serializes sentinel generation per proxy so N concurrent checkouts sharing a
+# proxy wait for ONE in-flight generation instead of all doing the expensive
+# PoW + VM proof (and spawning N Node subprocesses) at the same time.
+_SENTINEL_LOCKS: dict[str, "asyncio.Lock"] = {}
+SENTINEL_CACHE_TTL = 90.0  # seconds; the backend itself allows ~9 min reuse
+# Hard cap on a single sentinel token-pair generation (incl. retries). Without
+# it, a flaky sentinel backend through a bad proxy could stall a checkout for
+# minutes, and with the batch sharing one event loop that stall would eat a
+# semaphore slot and freeze the whole run.
+SENTINEL_GENERATION_TIMEOUT = 90.0
 
 
 class GCashCheckerError(RuntimeError):
@@ -149,12 +169,12 @@ normalize_proxy = _proxy
 
 
 def proxy_candidates(value: str) -> list[str]:
-    normalized = _proxy(value)
-    parsed = urlsplit(normalized)
-    result = [normalized]
-    if parsed.scheme.lower() == "http":
-        result.append(urlunsplit(("https", parsed.netloc, parsed.path, parsed.query, parsed.fragment)))
-    return result
+    # 只返回一个候选：把 host:port:user:password 归一化为 http://（或用户显式
+    # 的 https:// / socks5://）。过去这里会自动再派生一个 https:// 变体去重试
+    # 同一端口，但大量住宅代理端口只讲明文 HTTP，TLS 重试必然报误导性的
+    # "TLS connect error ... WRONG_VERSION_NUMBER"，掩盖真实原因（如 403
+    # forbidden ip）。用户若确需 TLS 代理，应显式输入 https:// 地址。
+    return [_proxy(value)]
 
 
 class _ProxySentinel(SentinelTokenProvider):
@@ -171,20 +191,51 @@ class _ProxySentinel(SentinelTokenProvider):
         return self._session
 
 
+def _is_informative_error(text: str) -> bool:
+    """判断错误信息是否已包含可定位的真实原因（HTTP 状态 / 代理拒绝等）。
+
+    用于在重试时优先保留这类信息，而不是被 TLS 握手噪声（WRONG_VERSION_NUMBER
+    等）或通用连接错误覆盖。
+    """
+    lowered = text.lower()
+    if any(marker in lowered for marker in (
+        "http ", "403", "407", "forbidden", "denied", "unauthorized",
+        "not supported", "whitelist", "blocked", "invalid",
+    )):
+        return True
+    return any(marker in lowered for marker in (
+        "curl: (7)", "connect tunnel failed", "could not resolve proxy",
+        "connection refused", "timed out", "timeout",
+    ))
+
+
 async def _sentinel_headers(proxy: str, device_id: str, did: str) -> dict[str, str]:
     last = "empty token"
     for attempt in range(2):
         provider = _ProxySentinel(proxy, {"oai-did": did})
         try:
-            token, so, diag = await provider.get_token_pair("chatgpt_checkout", device_id)
+            token, so, diag = await asyncio.wait_for(
+                provider.get_token_pair("chatgpt_checkout", device_id),
+                timeout=SENTINEL_GENERATION_TIMEOUT,
+            )
             if token and (not diag.get("turnstile_required") or diag.get("has_t")) and (not diag.get("so_required") or diag.get("has_so")):
                 return {
                     "OpenAI-Sentinel-Token": json.dumps(token, separators=(",", ":")),
                     "OpenAI-Sentinel-SO-Token": json.dumps(so, separators=(",", ":")) if so else "",
                 }
-            last = str(diag.get("init_error") or "empty Sentinel response")
+            error_text = str(diag.get("init_error") or "empty Sentinel response")
+            # 优先保留含真实原因的错误（HTTP 状态/403/forbidden 等），避免被
+            # 后面的通用连接错误覆盖，方便定位代理白名单或凭据问题。
+            if not _is_informative_error(last):
+                last = error_text
+        except asyncio.TimeoutError:
+            error_text = "Sentinel token generation timed out"
+            if not _is_informative_error(last):
+                last = error_text
         except Exception as exc:
-            last = f"{type(exc).__name__}: {exc}"
+            error_text = f"{type(exc).__name__}: {exc}"
+            if not _is_informative_error(last):
+                last = error_text
         finally:
             await provider.close()
         if attempt == 0:
@@ -201,24 +252,89 @@ def _headers(token: str, device_id: str, sentinel: dict[str, str] | None = None)
     }
 
 
-def _session(proxy: str):
-    session = requests.Session(impersonate="firefox144")
-    session.trust_env = False
-    session.proxies = {"http": proxy, "https": proxy}
+async def _get_async_session(proxy: str) -> "requests.AsyncSession":
+    """Return a cached AsyncSession for the given proxy.
+
+    Sessions are reused across concurrent checkouts through the same proxy so
+    that TLS and HTTP connection-pool setup is amortised.  Per-request cookies
+    (e.g. ``oai-did``) are passed on each call / auth header, never baked into
+    the session jar, so concurrent tasks on the same proxy do not interfere.
+    """
+    existing = _ASYNC_SESSIONS.get(proxy)
+    if existing is not None:
+        return existing
+    session = requests.AsyncSession(
+        impersonate="firefox144", timeout=70,
+        proxies={"http": proxy, "https": proxy} if proxy else None,
+    )
+    _ASYNC_SESSIONS[proxy] = session
     return session
 
 
-def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: dict[str, str]) -> tuple[Any, dict[str, Any]]:
-    http = _session(proxy)
+async def _drop_proxy_session(proxy: str) -> None:
+    """Remove and close the shared session for ``proxy``.
+
+    Used when a checkout is cancelled mid-flight (hard timeout): a request that
+    was torn down may have left the connection pool in an unusable state, so the
+    next checkout through this proxy should start from a fresh session.
+    """
+    session = _ASYNC_SESSIONS.pop(proxy, None)
+    if session is None:
+        return
     try:
-        http.cookies.set("oai-did", did, domain="chatgpt.com")
+        await session.close()
     except Exception:
         pass
+
+
+async def _checkout_identity(proxy: str) -> tuple[dict[str, str], str, str]:
+    """Return ``(sentinel_headers, device_id, did)`` for a checkout.
+
+    The Sentinel token pair is regenerated at most once per proxy per
+    ``SENTINEL_CACHE_TTL`` window; subsequent checkouts exiting through the same
+    proxy reuse the cached identity (same device id + token) which is what a
+    real browser would do.  Callers must use the returned device_id/did for the
+    whole checkout so the sentinel token and request headers stay consistent.
+
+    Generation is serialized per proxy with an asyncio lock: when many
+    concurrent checkouts share a proxy and the cache just expired, they all
+    wait for the single in-flight generation instead of each running the
+    expensive PoW + VM proof (and spawning its own Node subprocess) at once.
+    """
+    cached = _SENTINEL_CACHE.get(proxy)
+    if cached and cached.get("expires", 0) > time.monotonic():
+        return dict(cached["headers"]), cached["device_id"], cached["did"]
+    lock = _SENTINEL_LOCKS.setdefault(proxy, asyncio.Lock())
+    async with lock:
+        # Re-check under the lock: another task may have filled the cache while
+        # we were waiting for the lock.
+        cached = _SENTINEL_CACHE.get(proxy)
+        if cached and cached.get("expires", 0) > time.monotonic():
+            return dict(cached["headers"]), cached["device_id"], cached["did"]
+        device_id, did = str(uuid.uuid4()), str(uuid.uuid4())
+        headers = await _sentinel_headers(proxy, device_id, did)
+        _SENTINEL_CACHE[proxy] = {
+            "headers": headers, "device_id": device_id, "did": did,
+            "expires": time.monotonic() + SENTINEL_CACHE_TTL,
+        }
+        return headers, device_id, did
+
+
+def _drop_checkout_identity(proxy: str) -> None:
+    """Invalidate the cached Sentinel identity for a proxy.
+
+    Called when a checkout POST is rejected so the next attempt regenerates a
+    fresh token instead of retrying a poisoned one.
+    """
+    _SENTINEL_CACHE.pop(proxy, None)
+
+
+async def _create_checkout(token: str, proxy: str, sentinel: dict[str, str], device_id: str, did: str, preset: dict[str, str]) -> tuple[Any, dict[str, Any]]:
+    http = await _get_async_session(proxy)
     try:
-        http.get("https://chatgpt.com/api/auth/csrf", headers={"User-Agent": CHROME_UA}, timeout=20)
+        await http.get("https://chatgpt.com/api/auth/csrf", headers={"User-Agent": CHROME_UA}, cookies={"oai-did": did}, timeout=20)
     except Exception:
         pass
-    sentinel = asyncio.run(_sentinel_headers(proxy, device_id, did))
     country = str(preset.get("country") or "PH").upper()
     currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP", "IN": "INR", "PL": "PLN", "BR": "BRL"}.get(country, "USD")).upper()
     payload = {
@@ -226,13 +342,15 @@ def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: d
         "billing_details": {"country": country, "currency": currency},
         "cancel_url": "https://chatgpt.com/", "checkout_ui_mode": "custom", "check_card_proxy": True,
     }
-    response = http.post(OPENAI_CHECKOUT_URL, json=payload, headers=_headers(token, device_id, sentinel), timeout=60)
+    response = await http.post(OPENAI_CHECKOUT_URL, json=payload, headers=_headers(token, device_id, sentinel), cookies={"oai-did": did}, timeout=60)
     text = response.text or ""
     if response.status_code != 200:
+        _drop_checkout_identity(proxy)
         raise RuntimeError(f"OpenAI Checkout HTTP {response.status_code}: {text[:300]}")
     try:
         data = response.json() or {}
     except Exception as exc:
+        _drop_checkout_identity(proxy)
         raise RuntimeError(f"Checkout 返回非 JSON：{text[:200]}") from exc
     raw = " ".join(str(data.get(k) or "") for k in ("checkout_session_id", "url")) + " " + text
     custom_match = re.search(r"oaics_[A-Za-z0-9]+", raw)
@@ -257,8 +375,8 @@ def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: d
     raise GCashCheckerError("Checkout 未返回可识别会话（oaics_ 或 cs_*）")
 
 
-def _fetch_state(http: Any, token: str, sid: str, processor: str, device_id: str) -> dict[str, Any]:
-    response = http.get(f"https://chatgpt.com/backend-api/payments/checkout/{processor}/{sid}", headers=_headers(token, device_id), timeout=45)
+async def _fetch_state(http: Any, token: str, sid: str, processor: str, device_id: str) -> dict[str, Any]:
+    response = await http.get(f"https://chatgpt.com/backend-api/payments/checkout/{processor}/{sid}", headers=_headers(token, device_id), timeout=45)
     if response.status_code != 200:
         raise RuntimeError(f"读取 Checkout 失败：HTTP {response.status_code} {(response.text or '')[:200]}")
     return response.json() or {}
@@ -268,13 +386,13 @@ def _stripe_headers() -> dict[str, str]:
     return {"User-Agent": CHROME_UA, "Accept": "application/json", "Origin": "https://js.stripe.com", "Referer": "https://js.stripe.com/"}
 
 
-def _verify_stripe_pk(http: Any, session_id: str, preferred: str = "") -> str:
+async def _verify_stripe_pk(http: Any, session_id: str, preferred: str = "") -> str:
     keys = [preferred] if preferred else []
     keys.extend(pk for pk in KNOWN_PUBLISHABLE_KEYS.values() if pk and pk not in keys)
     last = ""
     for pk in keys:
         try:
-            response = http.post(
+            response = await http.post(
                 f"{STRIPE_API}/v1/payment_pages/{session_id}/init",
                 data={"key": pk, "_stripe_version": STRIPE_VERSION_BASE, "browser_locale": "en-US"},
                 headers=_stripe_headers(), timeout=20,
@@ -336,8 +454,8 @@ def _stripe_channel_available(methods: list[str], target: str) -> bool:
     return any(any(alias in method for alias in aliases) for method in methods)
 
 
-def _fetch_stripe_checkout_state(http: Any, session_id: str, publishable_key: str, country: str) -> dict[str, Any]:
-    pk = _verify_stripe_pk(http, session_id, publishable_key)
+async def _fetch_stripe_checkout_state(http: Any, session_id: str, publishable_key: str, country: str) -> dict[str, Any]:
+    pk = await _verify_stripe_pk(http, session_id, publishable_key)
     country = country.upper()
     profile_locale = {"GB": "en-GB", "NL": "nl-NL", "DE": "de-DE", "FR": "fr-FR", "US": "en-US", "PH": "en-PH", "VN": "vi-VN", "ID": "id-ID", "IN": "en-IN", "PL": "pl-PL", "BR": "pt-BR"}.get(country, "en-US")
     timezone = {"GB": "Europe/London", "NL": "Europe/Amsterdam", "DE": "Europe/Berlin", "FR": "Europe/Paris", "PH": "Asia/Manila", "VN": "Asia/Ho_Chi_Minh", "ID": "Asia/Jakarta", "IN": "Asia/Kolkata", "PL": "Europe/Warsaw", "BR": "America/Sao_Paulo"}.get(country, "America/New_York")
@@ -357,7 +475,7 @@ def _fetch_stripe_checkout_state(http: Any, session_id: str, publishable_key: st
         if version == STRIPE_VERSION_FULL:
             data["elements_session_client[client_betas][0]"] = "custom_checkout_server_updates_1"
             data["elements_session_client[client_betas][1]"] = "custom_checkout_manual_approval_1"
-        response = http.post(f"{STRIPE_API}/v1/payment_pages/{session_id}/init", data=data, headers=_stripe_headers(), timeout=30)
+        response = await http.post(f"{STRIPE_API}/v1/payment_pages/{session_id}/init", data=data, headers=_stripe_headers(), timeout=30)
         if response.status_code == 200:
             payload = response.json() or {}
             total = payload.get("total_summary") or {}
@@ -490,7 +608,7 @@ def _gcash_method(methods: Any) -> str:
     return ""
 
 
-def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False, target_channel: str = "gcash", preset: dict[str, str] | None = None, target_channels: list[str] | None = None) -> QualificationResult:
+async def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo: bool = False, target_channel: str = "gcash", preset: dict[str, str] | None = None, target_channels: list[str] | None = None, retries: int | None = None) -> QualificationResult:
     raw_account = str(access_token or "").strip()
     token = extract_access_token(raw_account)
     account_email = extract_account_email(raw_account)
@@ -501,15 +619,16 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
     if plan != str(preset.get("plan") or "plus").lower():
         raise GCashCheckerError("检测预设的计划参数不一致")
     normalized = _proxy(proxy)
+    max_retries = max(1, int(retries if retries is not None else MAX_PROXY_RETRIES))
     last_error: BaseException | None = None
-    for candidate in proxy_candidates(normalized)[:MAX_PROXY_RETRIES]:
+    for candidate in proxy_candidates(normalized)[:max_retries]:
         try:
-            device_id, did = str(uuid.uuid4()), str(uuid.uuid4())
-            http, meta = _create_checkout(token, candidate, device_id, did, preset)
+            sentinel, device_id, did = await _checkout_identity(candidate)
+            http, meta = await _create_checkout(token, candidate, sentinel, device_id, did, preset)
             country = str(preset.get("country") or "PH").upper()
             selected = [str(channel).lower() for channel in (target_channels or [target_channel]) if str(channel).strip()]
             if str(meta.get("checkout_session_id") or "").startswith("cs_"):
-                state = _fetch_stripe_checkout_state(
+                state = await _fetch_stripe_checkout_state(
                     http, meta["checkout_session_id"], str(meta.get("publishable_key") or ""), country
                 )
                 channels = [str(method).lower() for method in (state.get("payment_method_types") or []) if str(method).strip()]
@@ -525,16 +644,15 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                     channels, details, availability, account_email, token, country,
                 )
 
-            state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
+            state = await _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
             methods = state.get("custom_payment_methods")
             method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             for _ in range(3):
                 if method_id or (target_channel != "gcash" and _channel_available(methods, target_channel)):
                     break
                 await_seconds = 0.8
-                import time
-                time.sleep(await_seconds)
-                state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
+                await asyncio.sleep(await_seconds)
+                state = await _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
                 methods = state.get("custom_payment_methods")
                 method_id = _gcash_method(methods) if target_channel == "gcash" else ""
             channels = _available_channels(state.get("custom_payment_methods"))
@@ -543,6 +661,11 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
             available = availability.get(target_channel, False)
             details.append({"selected": availability, "checkout_provider": "open_ai"})
             return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, availability, account_email, token, country)
+        except asyncio.CancelledError:
+            # Hard timeout tore down an in-flight request; drop the shared
+            # session for this proxy so the next checkout gets a fresh pool.
+            await _drop_proxy_session(candidate)
+            raise
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):

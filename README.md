@@ -11,13 +11,16 @@ Sentinel 运行时需要 Node.js 18+ 和本地 `jsdom` 依赖；首次安装请�
 - **地区与渠道合并**：每个地区预设即一个「地区 + 渠道」组合，勾选哪个地区就检测该渠道，无需再单独选择渠道
 - 输出全部地区 Checkout 返回的全部可用支付渠道（按地区标注），并分别标记每个地区目标渠道是否可用
 - GCash 资格只认定 `cpmt_1TOgstC6h1nxGoI3WUVEY2cJ`，其他支付方式不会判定为 GCash
-- GUI 内置预设：菲律宾 GCash、菲律宾 Card、英国 PayPal、荷兰 iDEAL、越南 MoMo、印度尼西亚 GoPay、印度 UPI、波兰 BLIK、巴西 PIX
+- GUI 内置预设：菲律宾 GCash、菲律宾 Card、英国 PayPal、荷兰 PayPal、荷兰 iDEAL、越南 MoMo、印度尼西亚 GoPay、印度 UPI、波兰 BLIK、巴西 PIX
 - 支持批量 Token 和代理
 - 支持按渠道单独配置代理，未配置渠道自动回退到通用代理池
 - 支持原始 JWT，以及 `email----...----JWT` 整行账号格式
 - 支持 `host:port:user:password`、`curl -x/-U`、HTTP/HTTPS、SOCKS5/SOCKS5H 代理
 - 代理池轮询复用；代理隧道失败时自动尝试备用入口
 - 只读取 Checkout 支付方式，不调用 confirm/start，不发起实际支付；波兰 BLIK 使用波兰出口代理
+- **全异步并发**：所有批量检测跑在单个共享 asyncio 事件循环上，提交时全部任务瞬间创建，由并发数（`workers`）滑动窗口控制同时在飞数量——每返回一个结果立即补发下一个，直到全部完成
+- **代理会话复用**：同一代理的 HTTP 会话（TLS/连接池）被并发任务共享复用，无需为每个账号重新握手
+- **Sentinel Token 缓存**：同一代理在约 90 秒内复用同一份 Sentinel 身份（device id + token 对），避免对每个账号重复执行 PoW 与 VM proof（最耗时的部分）
 
 ## 启动
 
@@ -76,7 +79,7 @@ Content-Type: application/json
 }
 ```
 
-支持预设：`gcash`、`card`、`paypal_uk`、`ideal_nl`、`momo_vn`、`gopay_id`、`upi_in`、`blik_pl`、`pix_br`。波兰 BLIK 使用 `PL` / `PLN` 创建 Checkout，巴西 PIX 使用 `BR` / `BRL` 创建 Checkout；响应中的 `channel_details` 会包含 OpenAI Checkout 返回的渠道名称、ID 和原始类型。
+支持预设：`gcash`、`card`、`paypal_uk`、`paypal_nl`、`ideal_nl`、`momo_vn`、`gopay_id`、`upi_in`、`blik_pl`、`pix_br`。波兰 BLIK 使用 `PL` / `PLN` 创建 Checkout，巴西 PIX 使用 `BR` / `BRL` 创建 Checkout；响应中的 `channel_details` 会包含 OpenAI Checkout 返回的渠道名称、ID 和原始类型。
 
 批量检测仍使用 `POST /api/gcash/batch`，任务状态使用 `GET /api/gcash/batch/<job_id>`。除传统 `proxies` 外，也可传入按渠道配置的 `channel_proxies`：
 
@@ -96,6 +99,7 @@ Content-Type: application/json
   "regions": [
     {"name": "菲律宾·GCash", "preset": "gcash"},
     {"name": "英国·PayPal", "preset": "paypal_uk"},
+    {"name": "荷兰·PayPal", "preset": "paypal_nl"},
     {"name": "自定义·PIX", "preset": "custom", "channel": "pix", "country": "BR", "currency": "BRL"}
   ],
   "workers": 8
@@ -110,6 +114,14 @@ Content-Type: application/json
 
 - **复制全部有资格 Token**：提取检测结果中至少有一个已选渠道可用（`ok=true` 且任意已选渠道可用）的 Access Token，并按每行一个 Token 的格式复制到剪贴板。
 - **提交全部有资格 Token**：填写目标 API 地址后，手动点击提交按钮，将全部有资格 Token 通过 `POST` 请求发送到目标 API。系统不会在检测完成后自动提交。
+
+## 单号重试
+
+批量检测完成后，每个结果行末尾会出现**重试**按钮，点击后只对该账号重新检测（沿用该行原始的 Token、代理/渠道代理、地区和重试次数配置），不会重跑整个批次。重试期间该行显示“检测中…”，完成后结果原位更新；同一行的重试在运行期间不可再次触发（返回 409）。服务端会保存每批任务的原始提交数据，方便单独重试失败账号。
+
+账户详情弹窗（点击结果行「查看详情」）内置**一键复制 AT** 按钮，可直接复制该账号的 Access Token（JWT），另保留「复制」按钮复制用户提交的原始整行。
+
+复制采用双通道实现：优先在点击手势内同步执行 `execCommand` 复制（在非 HTTPS 环境或受限 iframe 中也能工作），失败时再回退到异步 Clipboard API，避免此前在 Promise 回调中丢失浏览器用户激活导致复制静默失败的问题。
 
 目标 API 请求格式：
 
@@ -138,8 +150,10 @@ socks5://USERNAME:PASSWORD@host:1080
 
 ## 环境变量
 
-- `GCASH_WORKERS`：每个批次默认并发检测数，默认 4
-- `GCASH_MAX_WORKERS`：单进程允许的每批最大并发数，默认 32
+- `GCASH_WORKERS`：每个批次默认并发数（滑动窗口同时发出的请求数），默认 4
+- `GCASH_MAX_WORKERS`：允许的每批最大并发数以及所有运行中任务的总并发上限，默认 32
+- `GCASH_ITEM_TIMEOUT`：单个账号的硬超时秒数（含重试与全部地区）。某个账号的网络请求卡死时，超时后会被取消并记为失败，滑动窗口继续推进，避免整个批次中途停住不再检测，默认 900
+- `GCASH_CHECK_TIMEOUT`：单次 `check_gcash` 调用（一次 Checkout 检测）的硬超时秒数，防止一次卡死的请求占用并发槽位拖住多次重试/多个地区，默认 150
 - `HOST`、`PORT`：监听地址，默认 `127.0.0.1:18097`
 
 批量接口可在请求体中传入 `workers` 覆盖本批次并发数，例如：
@@ -148,4 +162,4 @@ socks5://USERNAME:PASSWORD@host:1080
 {"tokens":["<JWT-1>","<JWT-2>"],"proxies":["proxy:8080"],"workers":16}
 ```
 
-`workers` 必须在 `1` 到 `GCASH_MAX_WORKERS` 之间；任务提交后立即返回 `job_id`，通过批量状态接口轮询结果。
+并发采用**瞬间全量创建 + 滑动窗口**模型：提交后所有任务立即创建并排队，前 `workers` 个请求同时发出，每返回一个结果马上补发下一个，直到全部完成。`workers` 必须在 `1` 到 `GCASH_MAX_WORKERS` 之间；任务提交后立即返回 `job_id`，通过批量状态接口轮询结果。
