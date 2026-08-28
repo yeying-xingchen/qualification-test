@@ -75,7 +75,10 @@ def _channel_proxy_values(item: dict[str, Any], channel: str) -> list[str]:
     return [str(value).strip() for value in (item.get("proxies") or [item.get("proxy") or ""]) if str(value).strip()]
 
 
-def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, channels: list[str] | None = None) -> None:
+def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, channels: list[str] | None = None, regions: list[dict[str, Any]] | None = None) -> None:
+    if regions:
+        _run_one_multi(job_id, index, item, with_promo, visitor, channels or [], regions)
+        return
     raw_candidates = _channel_proxy_values(item, target_channel)
     candidates = []
     for raw_proxy in raw_candidates:
@@ -104,6 +107,10 @@ def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, tar
                 break
     else:
         row = {"index": index, "ok": False, "qualified": False, "error": str(last_error or "检测失败")}
+    _store_row(job_id, index, row)
+
+
+def _store_row(job_id: str, index: int, row: dict[str, Any]) -> None:
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
@@ -113,6 +120,146 @@ def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, tar
         if job["completed"] >= job["total"]:
             job["status"] = "completed"
             job["finished_at"] = now()
+
+
+def _run_one_multi(job_id: str, index: int, item: dict[str, Any], with_promo: bool, visitor: bool, extra_channels: list[str], regions: list[dict[str, Any]]) -> None:
+    """Check one token against several region presets; each region creates its
+    own country/currency checkout and uses that channel's proxy pool."""
+    region_rows = []
+    for region in regions:
+        region_channel = str(region.get("channel") or "gcash").lower()
+        preset = {
+            "channel": region_channel,
+            "country": str(region.get("country") or "PH").upper(),
+            "currency": str(region.get("currency") or "").upper(),
+            "plan": str(region.get("plan") or "plus").lower(),
+        }
+        region_channels = list(dict.fromkeys(
+            [region_channel]
+            + [str(channel).lower().strip() for channel in extra_channels if str(channel).strip()]
+        ))
+        raw_candidates = _channel_proxy_values(item, region_channel)
+        candidates = []
+        for raw_proxy in raw_candidates:
+            try:
+                candidates.extend(proxy_candidates(raw_proxy))
+            except GCashCheckerError:
+                candidates.append(raw_proxy)
+        last_error: BaseException | None = None
+        result = None
+        for candidate in candidates:
+            try:
+                result = check_gcash(
+                    item["token"], candidate, with_promo=with_promo,
+                    target_channel=region_channel, preset=preset, target_channels=region_channels,
+                )
+                break
+            except GCashCheckerError as exc:
+                last_error = exc
+                if not _proxy_transport_error(exc) or candidate == candidates[-1]:
+                    break
+            except Exception as exc:
+                app.logger.exception("multi-region item failed")
+                last_error = exc
+                if not _proxy_transport_error(exc) or candidate == candidates[-1]:
+                    break
+        if result is not None:
+            region_rows.append(_region_result(region, result, visitor))
+        else:
+            region_rows.append(_region_error(region, last_error))
+    _store_row(job_id, index, _aggregate_row(index, region_rows, visitor, item))
+
+
+def _region_result(region: dict[str, Any], result: Any, visitor: bool) -> dict[str, Any]:
+    data = safe_result(result, visitor)
+    out = {
+        "name": str(region.get("name") or region.get("preset") or result.target_channel),
+        "channel": result.target_channel,
+        "country": data.get("country") or region.get("country") or "PH",
+        "currency": data.get("currency") or region.get("currency") or "",
+        "qualified": result.qualified,
+        "checkout_session_id": data.get("checkout_session_id", ""),
+        "processor_entity": data.get("processor_entity", ""),
+        "payment_method_type": data.get("payment_method_type", ""),
+        "checkout_amount": data.get("checkout_amount"),
+        "proxy_configured": data.get("proxy_configured", True),
+        "evidence": data.get("evidence", ""),
+        "available_channels": data.get("available_channels") or [],
+        "channel_details": data.get("channel_details") or [],
+        "channel_availability": data.get("channel_availability") or {},
+        "error": "",
+    }
+    if not visitor:
+        out["account_email"] = data.get("account_email", "")
+        out["access_token"] = data.get("access_token", "")
+    return out
+
+
+def _region_error(region: dict[str, Any], error: BaseException | None) -> dict[str, Any]:
+    return {
+        "name": str(region.get("name") or region.get("preset") or "地区"),
+        "channel": str(region.get("channel") or "gcash").lower(),
+        "country": str(region.get("country") or "PH").upper(),
+        "currency": str(region.get("currency") or "").upper(),
+        "qualified": False,
+        "error": str(error or "检测失败"),
+        "available_channels": [],
+        "channel_details": [],
+        "channel_availability": {},
+    }
+
+
+def _aggregate_row(index: int, region_rows: list[dict[str, Any]], visitor: bool, item: dict[str, Any]) -> dict[str, Any]:
+    """Merge per-region results into one table row: any-region qualification,
+    union of published channels, per-region breakdown for the frontend."""
+    succeeded = [r for r in region_rows if not r.get("error")]
+    failed = [r for r in region_rows if r.get("error")]
+    if not succeeded:
+        return {
+            "index": index, "ok": False, "qualified": False,
+            "error": "；".join(r["error"] for r in failed) or "检测失败",
+            "regions": region_rows,
+        }
+    selected: dict[str, bool] = {}
+    for r in succeeded:
+        for channel, value in (r.get("channel_availability") or {}).items():
+            selected[str(channel)] = bool(selected.get(str(channel)) or value)
+    available: list[str] = []
+    details: list[Any] = []
+    for r in succeeded:
+        tag = str(r.get("name") or r.get("channel") or "")
+        for channel in r.get("available_channels") or []:
+            if str(channel).lower() not in {str(c).lower() for c in available}:
+                available.append(channel)
+        for detail in r.get("channel_details") or []:
+            if isinstance(detail, dict) and isinstance(detail.get("selected"), dict):
+                continue
+            entry = dict(detail) if isinstance(detail, dict) else detail
+            if isinstance(entry, dict):
+                entry.setdefault("region", tag)
+            details.append(entry)
+    details.append({"selected": selected, "checkout_provider": "multi-region"})
+    primary = succeeded[0]
+    return {
+        "index": index, "ok": True, "qualified": any(r.get("qualified") for r in succeeded),
+        "channel": primary.get("channel") or "",
+        "target_channel": primary.get("channel") or "",
+        "country": primary.get("country") or "PH",
+        "currency": primary.get("currency") or "",
+        "checkout_session_id": next((r.get("checkout_session_id") or "" for r in succeeded if r.get("checkout_session_id")), ""),
+        "processor_entity": next((r.get("processor_entity") or "" for r in succeeded if r.get("processor_entity")), ""),
+        "payment_method_type": next((r.get("payment_method_type") or "" for r in succeeded if r.get("payment_method_type")), ""),
+        "checkout_amount": next((r.get("checkout_amount") for r in succeeded if r.get("checkout_amount") is not None), None),
+        "proxy_configured": True,
+        "evidence": " | ".join(f"{r.get('name')}: {r.get('evidence')}" for r in succeeded if r.get("evidence")) or "检测完成",
+        "available_channels": available,
+        "channel_details": details,
+        "channel_availability": selected,
+        "regions": region_rows,
+        "account_email": primary.get("account_email") or "",
+        "access_token": primary.get("access_token") or "",
+        "submitted_row": "" if visitor else item["token"],
+    }
 
 
 def run_one_limited(semaphore: threading.BoundedSemaphore, *args: Any) -> None:
@@ -267,6 +414,51 @@ def resolve_preset(payload: dict[str, Any]) -> tuple[str, dict[str, str]]:
     return name, preset
 
 
+def resolve_regions(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Resolve the optional multi-region request body. Accepts a list of preset
+    names/objects or a {name: overrides} dict. Returns None when the payload
+    carries no ``regions`` key so the legacy single-preset flow still works."""
+    raw = payload.get("regions")
+    if raw is None:
+        return None
+    custom = payload.get("presets") if isinstance(payload.get("presets"), dict) else {}
+    if isinstance(raw, dict):
+        entries: list[Any] = []
+        for name, value in raw.items():
+            entry: dict[str, Any] = {"preset": str(name)}
+            if isinstance(value, dict):
+                entry.update({str(key): item for key, item in value.items()})
+            entries.append(entry)
+    elif isinstance(raw, list):
+        entries = [entry if isinstance(entry, dict) else {"preset": entry} for entry in raw]
+    else:
+        entries = []
+    regions = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        preset_name = str(entry.get("preset") or entry.get("name") or "gcash").strip()
+        if not preset_name:
+            continue
+        preset = dict(BUILTIN_PRESETS.get(preset_name, {}))
+        if isinstance(custom.get(preset_name), dict):
+            preset.update(custom[preset_name])
+        if not preset:
+            preset = {"channel": "gcash", "country": "PH", "currency": "PHP", "plan": "plus"}
+        channel = str(entry.get("channel") or preset.get("channel") or "gcash").lower().strip()
+        country = str(entry.get("country") or preset.get("country") or "PH").upper().strip()
+        currency = str(entry.get("currency") or preset.get("currency") or "").upper().strip()
+        regions.append({
+            "name": str(entry.get("name") or preset_name).strip() or preset_name,
+            "preset": preset_name,
+            "channel": channel,
+            "country": country,
+            "currency": currency,
+            "plan": str(entry.get("plan") or preset.get("plan") or "plus").lower().strip(),
+        })
+    return regions or None
+
+
 @app.get("/api/presets")
 def list_presets():
     return jsonify({"ok": True, "presets": BUILTIN_PRESETS})
@@ -327,19 +519,26 @@ def create_batch():
             consume(cdk, len(items))
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 403
-    preset_name, preset = resolve_preset(payload)
-    target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
+    regions = resolve_regions(payload)
+    if regions is not None:
+        preset_name = regions[0]["preset"]
+        preset = {"channel": regions[0]["channel"], "country": regions[0]["country"], "currency": regions[0]["currency"], "plan": regions[0]["plan"]}
+        target_channel = regions[0]["channel"]
+        channels = [str(channel).lower().strip() for channel in (payload.get("channels") or []) if str(channel).strip()]
+    else:
+        preset_name, preset = resolve_preset(payload)
+        target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
+        channels = [str(channel).lower().strip() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
+        # Always include the primary preset channel even when the UI sends a
+        # different set of optional comparison channels.
+        if target_channel not in channels:
+            channels.insert(0, target_channel)
     # Submit one task per item. The process-wide executor bounds total load;
     # the per-job semaphore enforces the requested concurrency.
     job["workers"] = min(requested_workers, len(items))
     semaphore = threading.BoundedSemaphore(job["workers"])
-    channels = [str(channel).lower().strip() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
-    # Always include the primary preset channel even when the UI sends a
-    # different set of optional comparison channels.
-    if target_channel not in channels:
-        channels.insert(0, target_channel)
     for index, item in enumerate(items):
-        executor.submit(run_one_limited, semaphore, job_id, index, item, with_promo, target_channel, preset, visitor, channels)
+        executor.submit(run_one_limited, semaphore, job_id, index, item, with_promo, target_channel, preset, visitor, channels, regions)
     return jsonify({"ok": True, "job_id": job_id, "total": len(items), "workers": job["workers"]})
 
 

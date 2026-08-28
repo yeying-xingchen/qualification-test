@@ -7,7 +7,8 @@ Sentinel 运行时需要 Node.js 18+ 和本地 `jsdom` 依赖；首次安装请�
 ## 功能
 
 - 按国家和币种创建 Checkout，检测是否发布所选支付渠道
-- 输出 Checkout 返回的全部可用支付渠道，并单独标记目标渠道是否可用
+- 支持**同时勾选多个地区**（如菲律宾 GCash + 英国 PayPal + 荷兰 iDEAL），每个地区独立创建对应国家/币种的 Checkout
+- 输出全部地区 Checkout 返回的全部可用支付渠道（按地区标注），并分别标记每个地区目标渠道是否可用
 - GCash 资格只认定 `cpmt_1TOgstC6h1nxGoI3WUVEY2cJ`，其他支付方式不会判定为 GCash
 - GUI 内置预设：菲律宾 GCash、菲律宾 Card、英国 PayPal、荷兰 iDEAL、越南 MoMo、印度尼西亚 GoPay、印度 UPI、波兰 BLIK
 - 支持批量 Token 和代理
@@ -83,6 +84,25 @@ Content-Type: application/json
 ```
 
 渠道代理优先于通用代理；每个渠道支持字符串、数组或换行字符串。
+
+**多地区同时检测**：请求体传 `regions` 数组，每个元素是一个预设名或对象（`name` 用于结果展示，`preset` 指定内置预设；对象内可覆盖 `channel`、`country`、`currency`、`plan`）。每个地区独立创建该国家/币种的 Checkout，并使用该渠道（`channel_proxies[channel]` 或通用代理池）的代理：
+
+```json
+{
+  "tokens": ["<JWT>"],
+  "proxies": ["fallback:8080"],
+  "channel_proxies": {"gcash": ["ph-gcash:8080"], "paypal": ["uk-paypal:8080"]},
+  "regions": [
+    {"name": "菲律宾·GCash", "preset": "gcash"},
+    {"name": "英国·PayPal", "preset": "paypal_uk"},
+    {"name": "自定义·PIX", "preset": "custom", "channel": "pix", "country": "BR", "currency": "BRL"}
+  ],
+  "channels": ["gcash", "paypal"],
+  "workers": 8
+}
+```
+
+`regions` 也支持 `{"gcash": {...}, "paypal_uk": {...}}` 字典形式。未传 `regions` 时保持原有单预设行为。每个结果行包含 `regions` 数组（各地区 `qualified`、`available_channels`、`checkout_session_id`、`evidence` 或 `error`），同时汇总 `available_channels`（全部地区的渠道并集）与 `channel_details`；只要任一地区目标渠道可用即视为有资格。地区失败不影响其他地区的结果。
 
 ## 有资格 Token 批量操作
 
