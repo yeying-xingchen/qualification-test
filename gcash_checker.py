@@ -522,8 +522,7 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
                     meta["processor_entity"] if available else "",
                     target_channel if available else "", _amount(state), _currency(state), True,
                     f"{target_channel} channel published (Stripe Checkout)" if available else f"{country} Stripe checkout 未发布 {target_channel}",
-                    channels, details, account_email, token, country,
-                    channel_availability=availability,
+                    channels, details, availability, account_email, token, country,
                 )
 
             state = _fetch_state(http, token, meta["checkout_session_id"], meta["processor_entity"], device_id)
@@ -543,7 +542,7 @@ def check_gcash(access_token: str, proxy: str, *, plan: str = "plus", with_promo
             availability = {channel: (_channel_available(state.get("custom_payment_methods"), channel) if channel != "gcash" else bool(_gcash_method(state.get("custom_payment_methods")))) for channel in selected}
             available = availability.get(target_channel, False)
             details.append({"selected": availability, "checkout_provider": "open_ai"})
-            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, account_email, token, country, channel_availability=availability)
+            return QualificationResult(available, meta["checkout_session_id"], target_channel, target_channel if available else "", _amount(state), _currency(state), True, f"{target_channel} channel published" if available else f"{country} checkout 未发布 {target_channel}", channels, details, availability, account_email, token, country)
         except Exception as exc:
             last_error = exc
             if "CONNECT tunnel failed" not in str(exc) and "curl: (7)" not in str(exc):
