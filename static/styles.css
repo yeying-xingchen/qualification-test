@@ -14,3 +14,6 @@
 
 /* Multi-region selection: preset checkboxes + custom region inputs */
 .region-select{display:flex;flex-wrap:wrap;gap:12px;border:1px solid #293544;border-radius:12px;margin:18px 0;padding:12px}.region-select legend{color:var(--muted);font-size:12px;padding:0 6px}.region-select label{display:flex;align-items:center;gap:7px;font-weight:600}.region-select input{accent-color:var(--accent)}.custom-region{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 6px}@media(max-width:720px){.custom-region{grid-template-columns:1fr}}
+
+/* Specific failure reason column: allow long error text to wrap instead of stretching the table */
+.err-col{min-width:200px;max-width:340px;overflow-wrap:anywhere;word-break:break-word}

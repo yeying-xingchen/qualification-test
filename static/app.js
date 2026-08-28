@@ -96,11 +96,21 @@ function regionBadges(x) {
   if (!regions.length) return null;
   return regions.map(r => {
     const label = esc(r.name || r.channel || '地区');
-    if (r.error) return `<span class="no">${label} 失败</span>`;
+    if (r.error) return `<span class="no" title="${esc(r.error)}">${label} 失败</span>`;
     return r.qualified
       ? `<span class="yes">${label} 可用</span>`
       : `<span class="no">${label} 未发布</span>`;
   }).join(' ');
+}
+
+/* Specific failure reason(s) for a row: failed regions first, then the
+   whole-row error from the single-preset flow. Empty string when nothing failed. */
+function errorText(x) {
+  if (!x) return '';
+  const regions = Array.isArray(x.regions) ? x.regions : [];
+  const failed = regions.filter(r => r && r.error);
+  if (failed.length) return failed.map(r => `${r.name || r.channel || '地区'}：${r.error}`).join('；');
+  return x.ok ? '' : (x.error || '检测失败');
 }
 
 function regionChannelText(x) {
@@ -162,7 +172,8 @@ function render(data) {
     const detail = x.account_email
       ? `<button class="copy detail-btn" data-email="${esc(x.account_email)}" data-token="${esc(x.access_token || '')}" data-submitted="${esc(x.submitted_row || x.access_token || '')}">查看详情</button>`
       : '-';
-    return `<tr><td>${i + 1}</td><td>${state}</td><td>${detail}</td><td>${esc(x.checkout_session_id || '-')}</td><td>${esc(x.currency || '-')}</td><td>${esc(channelText || x.evidence || x.error || '-')}</td></tr>`;
+    const err = errorText(x);
+    return `<tr><td>${i + 1}</td><td>${state}</td><td>${detail}</td><td>${esc(x.checkout_session_id || '-')}</td><td>${esc(x.currency || '-')}</td><td>${esc(channelText || x.evidence || '-')}</td><td class="err-col">${err ? `<span class="err">${esc(err)}</span>` : '-'}</td></tr>`;
   }).join('');
 }
 
