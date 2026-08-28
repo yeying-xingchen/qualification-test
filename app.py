@@ -33,7 +33,6 @@ def _load_mode() -> str:
         return "self"
 
 service_mode = {"mode": _load_mode()}
-MAX_BATCH = max(1, int(os.getenv("GCASH_MAX_BATCH", "100")))
 # GCASH_WORKERS is the default per-job concurrency. Keep a larger shared pool so
 # a request can opt into higher concurrency without creating an executor per job.
 WORKERS = max(1, int(os.getenv("GCASH_WORKERS", "4")))
@@ -75,9 +74,9 @@ def _channel_proxy_values(item: dict[str, Any], channel: str) -> list[str]:
     return [str(value).strip() for value in (item.get("proxies") or [item.get("proxy") or ""]) if str(value).strip()]
 
 
-def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, channels: list[str] | None = None, regions: list[dict[str, Any]] | None = None) -> None:
+def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, target_channel: str, preset: dict[str, str], visitor: bool = False, regions: list[dict[str, Any]] | None = None) -> None:
     if regions:
-        _run_one_multi(job_id, index, item, with_promo, visitor, channels or [], regions)
+        _run_one_multi(job_id, index, item, with_promo, visitor, regions)
         return
     raw_candidates = _channel_proxy_values(item, target_channel)
     candidates = []
@@ -89,7 +88,7 @@ def run_one(job_id: str, index: int, item: dict[str, Any], with_promo: bool, tar
     last_error: BaseException | None = None
     for candidate in candidates:
         try:
-            result = check_gcash(item["token"], candidate, with_promo=with_promo, target_channel=target_channel, preset=preset, target_channels=channels)
+            result = check_gcash(item["token"], candidate, with_promo=with_promo, target_channel=target_channel, preset=preset)
             row = {"index": index, "ok": True, **safe_result(result, visitor)}
             if not visitor:
                 row["submitted_row"] = item["token"]
@@ -122,7 +121,7 @@ def _store_row(job_id: str, index: int, row: dict[str, Any]) -> None:
             job["finished_at"] = now()
 
 
-def _run_one_multi(job_id: str, index: int, item: dict[str, Any], with_promo: bool, visitor: bool, extra_channels: list[str], regions: list[dict[str, Any]]) -> None:
+def _run_one_multi(job_id: str, index: int, item: dict[str, Any], with_promo: bool, visitor: bool, regions: list[dict[str, Any]]) -> None:
     """Check one token against several region presets; each region creates its
     own country/currency checkout and uses that channel's proxy pool."""
     region_rows = []
@@ -134,10 +133,6 @@ def _run_one_multi(job_id: str, index: int, item: dict[str, Any], with_promo: bo
             "currency": str(region.get("currency") or "").upper(),
             "plan": str(region.get("plan") or "plus").lower(),
         }
-        region_channels = list(dict.fromkeys(
-            [region_channel]
-            + [str(channel).lower().strip() for channel in extra_channels if str(channel).strip()]
-        ))
         raw_candidates = _channel_proxy_values(item, region_channel)
         candidates = []
         for raw_proxy in raw_candidates:
@@ -151,7 +146,7 @@ def _run_one_multi(job_id: str, index: int, item: dict[str, Any], with_promo: bo
             try:
                 result = check_gcash(
                     item["token"], candidate, with_promo=with_promo,
-                    target_channel=region_channel, preset=preset, target_channels=region_channels,
+                    target_channel=region_channel, preset=preset,
                 )
                 break
             except GCashCheckerError as exc:
@@ -400,6 +395,7 @@ BUILTIN_PRESETS = {
     "gopay_id": {"channel": "gopay", "country": "ID", "currency": "IDR", "plan": "plus"},
     "upi_in": {"channel": "upi", "country": "IN", "currency": "INR", "plan": "plus"},
     "blik_pl": {"channel": "blik", "country": "PL", "currency": "PLN", "plan": "plus"},
+    "pix_br": {"channel": "pix", "country": "BR", "currency": "BRL", "plan": "plus"},
 }
 
 
@@ -492,8 +488,6 @@ def create_batch():
     items = parse_items(payload)
     if not items:
         return jsonify({"ok": False, "error": "请至少输入一条 Token"}), 400
-    if len(items) > MAX_BATCH:
-        return jsonify({"ok": False, "error": f"单批最多 {MAX_BATCH} 条"}), 400
     try:
         requested_workers = int(payload.get("workers") or WORKERS)
     except (TypeError, ValueError):
@@ -524,21 +518,15 @@ def create_batch():
         preset_name = regions[0]["preset"]
         preset = {"channel": regions[0]["channel"], "country": regions[0]["country"], "currency": regions[0]["currency"], "plan": regions[0]["plan"]}
         target_channel = regions[0]["channel"]
-        channels = [str(channel).lower().strip() for channel in (payload.get("channels") or []) if str(channel).strip()]
     else:
         preset_name, preset = resolve_preset(payload)
         target_channel = str(payload.get("target_channel") or preset.get("channel") or "gcash").lower()
-        channels = [str(channel).lower().strip() for channel in (payload.get("channels") or [target_channel]) if str(channel).strip()]
-        # Always include the primary preset channel even when the UI sends a
-        # different set of optional comparison channels.
-        if target_channel not in channels:
-            channels.insert(0, target_channel)
     # Submit one task per item. The process-wide executor bounds total load;
     # the per-job semaphore enforces the requested concurrency.
     job["workers"] = min(requested_workers, len(items))
     semaphore = threading.BoundedSemaphore(job["workers"])
     for index, item in enumerate(items):
-        executor.submit(run_one_limited, semaphore, job_id, index, item, with_promo, target_channel, preset, visitor, channels, regions)
+        executor.submit(run_one_limited, semaphore, job_id, index, item, with_promo, target_channel, preset, visitor, regions)
     return jsonify({"ok": True, "job_id": job_id, "total": len(items), "workers": job["workers"]})
 
 

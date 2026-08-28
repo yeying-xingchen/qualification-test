@@ -60,6 +60,7 @@ const REGION_META = {
   gopay_id:  { label: '印度尼西亚·GoPay', channel: 'gopay',   country: 'ID', currency: 'IDR' },
   upi_in:    { label: '印度·UPI',         channel: 'upi',     country: 'IN', currency: 'INR' },
   blik_pl:   { label: '波兰·BLIK',        channel: 'blik',    country: 'PL', currency: 'PLN' },
+  pix_br:    { label: '巴西·PIX',         channel: 'pix',     country: 'BR', currency: 'BRL' },
 };
 
 const customRegionBox = document.querySelector('input[name="regions"][value="custom"]');
@@ -279,7 +280,6 @@ if (start) start.onclick = async () => {
     setMessage('请至少选择一个检测地区');
     return;
   }
-  const selected_channels = [...document.querySelectorAll('input[name="channels"]:checked')].map(x => x.value);
   const workers = Math.max(1, Math.min(32, Number.parseInt($('workers')?.value || '4', 10) || 4));
   const primary = regions[0];
   const customRegion = regions.find(r => r.preset === 'custom');
@@ -296,7 +296,6 @@ if (start) start.onclick = async () => {
       visitor: false,
       cdk: $('cdk')?.value?.trim() || '',
       regions,
-      channels: selected_channels,
       preset: primary.preset,
       target_channel: primary.channel,
     };

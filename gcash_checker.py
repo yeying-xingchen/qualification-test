@@ -220,7 +220,7 @@ def _create_checkout(token: str, proxy: str, device_id: str, did: str, preset: d
         pass
     sentinel = asyncio.run(_sentinel_headers(proxy, device_id, did))
     country = str(preset.get("country") or "PH").upper()
-    currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP", "IN": "INR", "PL": "PLN"}.get(country, "USD")).upper()
+    currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP", "IN": "INR", "PL": "PLN", "BR": "BRL"}.get(country, "USD")).upper()
     payload = {
         "entry_point": "all_plans_pricing_modal", "plan_name": str(preset.get("plan_name") or "chatgptplusplan"),
         "billing_details": {"country": country, "currency": currency},
@@ -339,8 +339,8 @@ def _stripe_channel_available(methods: list[str], target: str) -> bool:
 def _fetch_stripe_checkout_state(http: Any, session_id: str, publishable_key: str, country: str) -> dict[str, Any]:
     pk = _verify_stripe_pk(http, session_id, publishable_key)
     country = country.upper()
-    profile_locale = {"GB": "en-GB", "NL": "nl-NL", "DE": "de-DE", "FR": "fr-FR", "US": "en-US", "PH": "en-PH", "VN": "vi-VN", "ID": "id-ID", "IN": "en-IN", "PL": "pl-PL"}.get(country, "en-US")
-    timezone = {"GB": "Europe/London", "NL": "Europe/Amsterdam", "DE": "Europe/Berlin", "FR": "Europe/Paris", "PH": "Asia/Manila", "VN": "Asia/Ho_Chi_Minh", "ID": "Asia/Jakarta", "IN": "Asia/Kolkata", "PL": "Europe/Warsaw"}.get(country, "America/New_York")
+    profile_locale = {"GB": "en-GB", "NL": "nl-NL", "DE": "de-DE", "FR": "fr-FR", "US": "en-US", "PH": "en-PH", "VN": "vi-VN", "ID": "id-ID", "IN": "en-IN", "PL": "pl-PL", "BR": "pt-BR"}.get(country, "en-US")
+    timezone = {"GB": "Europe/London", "NL": "Europe/Amsterdam", "DE": "Europe/Berlin", "FR": "Europe/Paris", "PH": "Asia/Manila", "VN": "Asia/Ho_Chi_Minh", "ID": "Asia/Jakarta", "IN": "Asia/Kolkata", "PL": "Europe/Warsaw", "BR": "America/Sao_Paulo"}.get(country, "America/New_York")
     last_error = ""
     for version in (STRIPE_VERSION_BASE, STRIPE_VERSION_FULL):
         data = {
