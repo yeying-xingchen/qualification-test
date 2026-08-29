@@ -337,11 +337,20 @@ async def _create_checkout(token: str, proxy: str, sentinel: dict[str, str], dev
         pass
     country = str(preset.get("country") or "PH").upper()
     currency = str(preset.get("currency") or {"GB": "GBP", "NL": "EUR", "VN": "VND", "PH": "PHP", "IN": "INR", "PL": "PLN", "BR": "BRL"}.get(country, "USD")).upper()
+    # MoMo is exposed through the Stripe checkout; the ``check_card_proxy`` flag
+    # changes the checkout payload and can keep the MoMo session from being
+    # created / published. Reference implementation (check_momo_eligibility.py)
+    # creates the VN/VND checkout with price_interval + seat_quantity and no
+    # check_card_proxy, then reads MoMo from the Stripe init payment method types.
+    channel = str(preset.get("channel") or "").lower().strip()
     payload = {
         "entry_point": "all_plans_pricing_modal", "plan_name": str(preset.get("plan_name") or "chatgptplusplan"),
+        "price_interval": "month", "seat_quantity": 1,
         "billing_details": {"country": country, "currency": currency},
-        "cancel_url": "https://chatgpt.com/", "checkout_ui_mode": "custom", "check_card_proxy": True,
+        "cancel_url": "https://chatgpt.com/", "checkout_ui_mode": "custom",
     }
+    if channel != "momo":
+        payload["check_card_proxy"] = True
     response = await http.post(OPENAI_CHECKOUT_URL, json=payload, headers=_headers(token, device_id, sentinel), cookies={"oai-did": did}, timeout=60)
     text = response.text or ""
     if response.status_code != 200:
@@ -417,7 +426,9 @@ def _stripe_payment_method_types(init_data: dict[str, Any]) -> list[str]:
         if isinstance(value, dict):
             for key in ("type", "name", "display_name", "payment_method_type", "provider", "id"):
                 add(value.get(key))
-            for nested_key in ("payment_method_types", "payment_method_specs", "ordered_payment_method_types", "external_payment_method_specs"):
+            # Also descend into elements_options (Stripe init nests the
+            # published method types there, see check_momo_eligibility.py).
+            for nested_key in ("payment_method_types", "payment_method_specs", "ordered_payment_method_types", "external_payment_method_specs", "elements_options"):
                 nested = value.get(nested_key)
                 if nested is not value:
                     walk(nested)
@@ -427,7 +438,7 @@ def _stripe_payment_method_types(init_data: dict[str, Any]) -> list[str]:
         elif isinstance(value, str):
             add(value)
 
-    for section_name in ("payment_method_types", "payment_method_types_preference", "payment_method_specs", "ordered_payment_method_types", "external_payment_method_specs"):
+    for section_name in ("payment_method_types", "payment_method_types_preference", "payment_method_specs", "ordered_payment_method_types", "external_payment_method_specs", "elements_options"):
         walk(init_data.get(section_name))
     return found
 
