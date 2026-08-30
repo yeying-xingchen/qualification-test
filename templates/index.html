@@ -3,48 +3,70 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Payment Channel Qualification</title>
+  <title>支付渠道资格检测 · Qualification Desk</title>
+  <meta name="description" content="批量检测不同国家与支付渠道的 Checkout 资格，仅进行只读检测，不发起支付。">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body data-service-mode="{{ service_mode|default('self', true) }}">
-  <main class="shell">
-    <div class="home-admin-link"><a href="/admin">管理员后台</a></div>
-    <header>
+  <main class="shell" id="mainContent">
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
+    <div class="topbar">
+      <a class="brand-mark" href="/" aria-label="返回检测主页"><span class="brand-mark-icon">Q</span><span>Qualification Desk</span></a>
+      <a class="home-admin-link" href="/admin">管理员后台 <span aria-hidden="true">↗</span></a>
+    </div>
+    <header class="hero">
       <div class="eyebrow">MULTI-REGION · CHECKOUT QUALIFICATION</div>
-      <h1>支付渠道资格检测</h1>
+      <h1>支付渠道<br><em>资格检测</em></h1>
       <p>批量使用目标国家代理创建对应 Checkout，可同时检测多个地区并列出全部可用支付渠道，仅检测不发起支付。</p>
+      <div class="hero-badges" aria-label="工具特性"><span>只读检测</span><span>多地区并行</span><span>支持批量</span></div>
     </header>
 
-    {% if service_mode|default('self', true) == 'visitor' %}<section class="card mode-card" id="modeCard"><div class="mode-note">访客模式需要 CDK</div><label id="cdkField">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX"></label></section>{% endif %}
-    <section class="card input-card">
+    {% if service_mode|default('self', true) == 'visitor' %}<section class="card mode-card" id="modeCard"><div class="mode-note">访客模式需要 CDK</div><label id="cdkField" for="cdk">CDK<input id="cdk" placeholder="GC-XXXX-XXXX-XXXX-XXXX" autocomplete="off"></label></section>{% endif %}
+    <section class="card input-card" aria-labelledby="inputHeading">
       <div class="section-heading">
-        <div><span class="section-kicker">01 · INPUT</span><h2>准备检测数据</h2></div>
+        <div><span class="section-kicker">01 · INPUT</span><h2 id="inputHeading">准备检测数据</h2></div>
         <span class="hint">每行一条，支持批量粘贴</span>
       </div>
-      <div class="grid">
-        <label>Token / 账号整行（每行一条）<textarea id="tokens" aria-describedby="tokenHint" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea><span id="tokenHint" class="field-hint">已识别 <b id="tokenCount">0</b> 条 Token</span></label>
-        <label>通用代理（每行一条，可作为未单独配置渠道的后备）<textarea id="proxies" aria-describedby="proxyHint" placeholder="host:port:user:password&#10;us.1024proxy.io:3000:username:password&#10;curl -x us.1024proxy.io:3000 -U &quot;user:password&quot; ipinfo.io&#10;socks5://user:pass@ph-proxy:1080&#10;代理池会按顺序循环复用"></textarea><span id="proxyHint" class="field-hint">已识别 <b id="proxyCount">0</b> 条代理</span></label>
-      </div>
-      <label class="check"><input id="withPromo" type="checkbox"> 同时携带优惠请求（不代表优惠资格）</label>
-      <label class="channel-proxy-field">渠道专用代理（可选，未填写的渠道使用通用代理）<textarea id="channelProxies" placeholder="每行格式：渠道=代理；同一渠道可填写多行，例如：&#10;gcash=ph-gcash.example:8080:user:pass&#10;card=ph-card.example:8080:user:pass&#10;paypal=uk-paypal.example:8080:user:pass&#10;paypal=nl-paypal.example:8080:user:pass"></textarea></label>
-      <fieldset class="region-select"><legend>检测地区 / 渠道（可多选，每项即一个「地区 + 渠道」组合，独立创建对应国家/币种的 Checkout）</legend><label><input type="checkbox" name="regions" value="gcash" checked> 菲律宾 / PHP / GCash</label><label><input type="checkbox" name="regions" value="card"> 菲律宾 / PHP / Card</label><label><input type="checkbox" name="regions" value="paypal_uk"> 英国 / GBP / PayPal</label><label><input type="checkbox" name="regions" value="paypal_nl"> 荷兰 / EUR / PayPal</label><label><input type="checkbox" name="regions" value="ideal_nl"> 荷兰 / EUR / iDEAL</label><label><input type="checkbox" name="regions" value="momo_vn"> 越南 / VND / MoMo</label><label><input type="checkbox" name="regions" value="gopay_id"> 印度尼西亚 / IDR / GoPay</label><label><input type="checkbox" name="regions" value="upi_in"> 印度 / INR / UPI</label><label><input type="checkbox" name="regions" value="blik_pl"> 波兰 / PLN / BLIK</label><label><input type="checkbox" name="regions" value="pix_br"> 巴西 / BRL / PIX</label><label><input type="checkbox" name="regions" value="custom"> 自定义地区</label></fieldset>
-      <div class="custom-region" id="customRegion" hidden><label>自定义渠道<input id="customChannel" placeholder="例如 card 或 gcash"></label><label>国家（ISO 代码）<input id="customCountry" placeholder="例如 PH / GB / IN"></label><label>币种<input id="customCurrency" placeholder="例如 PHP / GBP / INR"></label></div>
-      <label class="concurrency-select">并发数<input id="workers" type="number" min="1" max="32" value="4" inputmode="numeric"><span class="field-hint">所有请求会瞬间全部创建，此并发数决定同时发出的数量；每返回一个结果立即补发下一个，直到全部完成（最大 32）</span></label>
-      <label class="concurrency-select">失败重试次数<input id="retries" type="number" min="1" max="20" value="2" inputmode="numeric"><span class="field-hint">单个账号失败后最多重试的次数，达到上限即判定为失败</span></label>
-      <div class="action-row"><button id="start">开始批量检测</button><button id="stopBatch" type="button" hidden>停止轮询</button><span class="elapsed-label" id="elapsed" hidden></span></div>
-      <div class="progress" id="progressWrap" hidden><div class="progress-bar"><div class="progress-fill" id="progressBar"></div></div><span class="progress-label" id="progressLabel"></span></div>
-      <span id="message"></span>
+      <fieldset class="form-group required-group">
+        <legend><span class="group-number">A</span> 必填数据</legend>
+        <div class="grid">
+          <label for="tokens">Token / 账号整行（每行一条）<textarea id="tokens" aria-required="true" aria-describedby="tokenHint" placeholder="支持 JWT，也支持 email----password----...----JWT 整行格式"></textarea><span id="tokenHint" class="field-hint">已识别 <b id="tokenCount" aria-live="polite">0</b> 条 Token</span></label>
+          <label for="proxies">通用代理（每行一条，可作为未单独配置渠道的后备）<textarea id="proxies" aria-describedby="proxyHint" placeholder="host:port:user:password&#10;us.1024proxy.io:3000:username:password&#10;curl -x us.1024proxy.io:3000 -U &quot;user:password&quot; ipinfo.io&#10;socks5://user:pass@ph-proxy:1080&#10;代理池会按顺序循环复用"></textarea><span id="proxyHint" class="field-hint">已识别 <b id="proxyCount" aria-live="polite">0</b> 条代理</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="form-group optional-group">
+        <legend><span class="group-number">B</span> 可选代理与优惠</legend>
+        <label class="check" for="withPromo"><input id="withPromo" type="checkbox"> 同时携带优惠请求 <span class="inline-note">不代表优惠资格</span></label>
+        <label class="channel-proxy-field" for="channelProxies">渠道专用代理（可选，未填写的渠道使用通用代理）<textarea id="channelProxies" placeholder="每行格式：渠道=代理；同一渠道可填写多行，例如：&#10;gcash=ph-gcash.example:8080:user:pass&#10;card=ph-card.example:8080:user:pass&#10;paypal=uk-paypal.example:8080:user:pass&#10;paypal=nl-paypal.example:8080:user:pass"></textarea></label>
+        <p class="helper-note"><span aria-hidden="true">↳</span> 专用代理优先于通用代理；每个渠道都可以配置多个入口。</p>
+      </fieldset>
+      <fieldset class="form-group region-group">
+        <legend><span class="group-number">C</span> 选择检测地区</legend>
+        <p class="group-description">可多选。每一项都是一个“地区 + 渠道”组合，会独立创建对应国家 / 币种的 Checkout。</p>
+        <div class="region-select"><label><input type="checkbox" name="regions" value="gcash" checked> 菲律宾 <span>PHP · GCash</span></label><label><input type="checkbox" name="regions" value="card"> 菲律宾 <span>PHP · Card</span></label><label><input type="checkbox" name="regions" value="paypal_uk"> 英国 <span>GBP · PayPal</span></label><label><input type="checkbox" name="regions" value="paypal_nl"> 荷兰 <span>EUR · PayPal</span></label><label><input type="checkbox" name="regions" value="ideal_nl"> 荷兰 <span>EUR · iDEAL</span></label><label><input type="checkbox" name="regions" value="momo_vn"> 越南 <span>VND · MoMo</span></label><label><input type="checkbox" name="regions" value="gopay_id"> 印度尼西亚 <span>IDR · GoPay</span></label><label><input type="checkbox" name="regions" value="upi_in"> 印度 <span>INR · UPI</span></label><label><input type="checkbox" name="regions" value="blik_pl"> 波兰 <span>PLN · BLIK</span></label><label><input type="checkbox" name="regions" value="pix_br"> 巴西 <span>BRL · PIX</span></label><label><input type="checkbox" name="regions" value="custom"> 自定义地区</label></div>
+        <div class="custom-region" id="customRegion" hidden><label for="customChannel">自定义渠道<input id="customChannel" placeholder="例如 card 或 gcash"></label><label for="customCountry">国家（ISO 代码）<input id="customCountry" placeholder="例如 PH / GB / IN"></label><label for="customCurrency">币种<input id="customCurrency" placeholder="例如 PHP / GBP / INR"></label></div>
+      </fieldset>
+      <fieldset class="form-group advanced-group">
+        <legend><span class="group-number">D</span> 高级设置</legend>
+        <div class="advanced-grid">
+          <label class="concurrency-select" for="workers">并发数<input id="workers" type="number" min="1" max="32" value="4" inputmode="numeric"><span class="field-hint">同时发出的请求数，最大 32</span></label>
+          <label class="concurrency-select" for="retries">失败重试次数<input id="retries" type="number" min="1" max="20" value="2" inputmode="numeric"><span class="field-hint">单个账号失败后的尝试次数</span></label>
+        </div>
+      </fieldset>
+      <div class="action-row"><button id="start"><span class="button-icon" aria-hidden="true">↗</span>开始批量检测</button><button id="stopBatch" type="button" hidden>停止查看</button><span class="elapsed-label" id="elapsed" hidden></span></div>
+      <div class="progress" id="progressWrap" hidden><div class="progress-bar" role="progressbar" aria-label="批量检测进度" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="progress-fill" id="progressBar"></div></div><span class="progress-label" id="progressLabel" aria-live="polite"></span></div>
+      <span id="message" class="form-message" role="status" aria-live="polite"></span>
     </section>
 
-    <section class="card stats" id="stats" hidden>
-      <div><b id="total">0</b><span>总数</span></div>
-      <div><b id="completed">0</b><span>已完成</span></div>
-      <div><b id="qualified">0</b><span>有资格</span></div>
-      <div><b id="failed">0</b><span>失败</span></div>
+    <section class="card stats" id="stats" aria-label="检测概览" aria-live="polite" hidden>
+      <div class="stat-total"><b id="total">0</b><span>总数</span></div>
+      <div class="stat-completed"><b id="completed">0</b><span>已完成</span></div>
+      <div class="stat-qualified"><b id="qualified">0</b><span>有资格</span></div>
+      <div class="stat-failed"><b id="failed">0</b><span>失败</span></div>
     </section>
 
-    <section class="card" id="resultsCard" hidden>
-      <div class="toolbar"><h2>检测结果</h2><div class="toolbar-actions"><button id="copyQualified" type="button">复制全部有资格 Token</button><button id="export" type="button">导出 JSON</button></div></div>
+    <section class="card" id="resultsCard" aria-labelledby="resultsHeading" hidden>
+      <div class="toolbar"><div><span class="section-kicker">02 · OUTPUT</span><h2 id="resultsHeading">检测结果</h2></div><div class="toolbar-actions"><button id="copyQualified" type="button" disabled>复制全部有资格 Token</button><button id="export" type="button" disabled>导出 JSON</button></div></div>
       <div class="qualified-actions">
         <label>自动提交 API 地址（仅在点击按钮后提交）<input id="submitEndpoint" type="url" placeholder="https://example.com/api/tokens" autocomplete="off"></label>
         <button id="submitQualified" type="button">提交全部有资格 Token</button>
@@ -53,12 +75,12 @@
       <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>账户详情</th><th>Checkout</th><th>币种</th><th>全部可用渠道</th><th>错误详情</th><th>操作</th></tr></thead><tbody id="results"></tbody></table></div>
     </section>
 
-    <section class="card" id="historyCard">
-      <div class="toolbar"><h2>历史任务</h2><div class="toolbar-actions"><button id="refreshHistory" type="button">刷新</button></div></div>
+    <section class="card" id="historyCard" aria-labelledby="historyHeading">
+      <div class="toolbar"><div><span class="section-kicker">03 · ARCHIVE</span><h2 id="historyHeading">历史任务</h2></div><div class="toolbar-actions"><button id="refreshHistory" type="button">刷新</button></div></div>
       <div class="table-wrap"><table><thead><tr><th>状态</th><th>创建时间</th><th>完成时间</th><th>进度</th><th>有资格</th><th>失败</th><th>渠道</th><th>操作</th></tr></thead><tbody id="historyList"></tbody></table></div>
       <div class="pagination-row"><button id="historyPrev" type="button">上一页</button><span id="historyPageInfo"></span><button id="historyNext" type="button">下一页</button></div>
     </section>
-  <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><div class="modal-account"><span class="modal-account-label">邮箱</span><strong id="modalEmail"></strong></div><div class="modal-field"><label for="modalAT">Access Token（AT）</label><textarea id="modalAT" readonly></textarea><span class="modal-copy-row"><button id="copyModalAT" type="button">一键复制 AT</button><span id="modalATHint" class="field-hint"></span></span></div><div class="modal-field"><label for="modalToken">用户提交的行</label><textarea id="modalToken" readonly></textarea><span class="modal-copy-row"><button id="copyModalToken" type="button">复制</button></span></div></div></div>
+  <div id="accountModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalHeading" hidden><div class="modal-panel"><button id="closeModal" class="modal-close" aria-label="关闭账户详情">×</button><h2 id="modalHeading">账户详情</h2><div class="modal-account"><span class="modal-account-label">邮箱</span><strong id="modalEmail"></strong></div><div class="modal-field"><label for="modalAT">Access Token（AT）</label><textarea id="modalAT" readonly></textarea><span class="modal-copy-row"><button id="copyModalAT" type="button">一键复制 AT</button><span id="modalATHint" class="field-hint"></span></span></div><div class="modal-field"><label for="modalToken">用户提交的行</label><textarea id="modalToken" readonly></textarea><span class="modal-copy-row"><button id="copyModalToken" type="button">复制</button></span></div></div></div>
   </main>
   <script src="/static/app.js"></script>
 </body>

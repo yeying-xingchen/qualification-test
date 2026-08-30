@@ -10,6 +10,7 @@ function updateCounts() {
   if (pc) pc.textContent = count('proxies');
 }
 ['tokens', 'proxies'].forEach(id => $(id)?.addEventListener('input', updateCounts));
+['workers', 'retries'].forEach(id => $(id)?.addEventListener('input', e => e.currentTarget.removeAttribute('aria-invalid')));
 
 function syncMode(mode) {
   const visitor = mode === 'visitor', card = $('modeCard'), field = $('cdkField');
@@ -146,6 +147,9 @@ function legacyChannelText(x) {
 function render(data) {
   $('stats').hidden = false;
   $('resultsCard').hidden = false;
+  const hasResults = data.results?.some(Boolean);
+  if ($('copyQualified')) $('copyQualified').disabled = !hasResults;
+  if ($('export')) $('export').disabled = !hasResults;
   $('total').textContent = data.total;
   $('completed').textContent = data.completed;
 
@@ -159,7 +163,7 @@ function render(data) {
   lastResults = rows;
 
   $('results').innerHTML = data.results.map((x, i) => {
-    if (!x) return `<tr><td>${i + 1}</td><td colspan="7">检测中…</td></tr>`;
+    if (!x) return `<tr class="pending-row"><td>${i + 1}</td><td colspan="7"><span class="run">检测中…</span></td></tr>`;
     const badges = regionBadges(x);
     let state;
     if (badges) state = badges;
@@ -175,7 +179,7 @@ function render(data) {
       : '-';
     const err = errorText(x);
     const retryBtn = data.status === 'completed'
-      ? `<button class="retry-btn" data-index="${i}" type="button">重试</button>`
+      ? `<button class="retry-btn" data-index="${i}" type="button" aria-label="重试第 ${i + 1} 条">重试</button>`
       : '';
     return `<tr><td>${i + 1}</td><td>${state}</td><td>${detail}</td><td>${esc(x.checkout_session_id || '-')}</td><td>${esc(x.currency || '-')}</td><td>${esc(channelText || x.evidence || '-')}</td><td class="err-col">${err ? `<span class="err">${esc(err)}</span>` : '-'}</td><td>${retryBtn}</td></tr>`;
   }).join('');
@@ -187,11 +191,17 @@ function updateProgress(completed, total) {
   const bar = $('progressBar');
   const label = $('progressLabel');
   const wrap = $('progressWrap');
+  const progressBar = document.querySelector('.progress-bar');
   if (!bar) return;
   if (wrap) wrap.hidden = false;
-  if (total === 0) { bar.style.width = '0%'; if (label) label.textContent = ''; return; }
+  if (total === 0) { bar.style.width = '0%'; if (label) label.textContent = ''; if (progressBar) progressBar.setAttribute('aria-valuemax', '0'); return; }
   const pct = Math.min(100, Math.round((completed / total) * 100));
   bar.style.width = pct + '%';
+  if (progressBar) {
+    progressBar.setAttribute('aria-valuemax', String(total));
+    progressBar.setAttribute('aria-valuenow', String(completed));
+    progressBar.setAttribute('aria-valuetext', `${completed} / ${total}，${pct}%`);
+  }
   if (label) label.textContent = `${completed} / ${total} (${pct}%)`;
 }
 
@@ -199,8 +209,10 @@ function resetProgress() {
   const bar = $('progressBar');
   const label = $('progressLabel');
   const wrap = $('progressWrap');
+  const progressBar = document.querySelector('.progress-bar');
   if (bar) bar.style.width = '0%';
   if (label) label.textContent = '';
+  if (progressBar) { progressBar.setAttribute('aria-valuemax', '0'); progressBar.setAttribute('aria-valuenow', '0'); progressBar.removeAttribute('aria-valuetext'); }
   if (wrap) wrap.hidden = true;
 }
 
@@ -246,7 +258,7 @@ function stopPolling() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   current = null;
   batchStartTime = null;
-  if (start) start.disabled = false;
+  if (start) { start.disabled = false; start.classList.remove('is-loading'); start.removeAttribute('aria-busy'); }
   if (stopBtn) stopBtn.hidden = true;
   if (elapsedLabel) elapsedLabel.hidden = true;
 }
@@ -296,14 +308,31 @@ if (start) start.onclick = async () => {
     setMessage('请至少选择一个检测地区');
     return;
   }
-  const workers = Math.max(1, Math.min(32, Number.parseInt($('workers')?.value || '4', 10) || 4));
-  const retries = Math.max(1, Math.min(20, Number.parseInt($('retries')?.value || '2', 10) || 2));
+  const workersInput = $('workers');
+  const retriesInput = $('retries');
+  const workers = Number.parseInt(workersInput?.value || '4', 10);
+  const retries = Number.parseInt(retriesInput?.value || '2', 10);
+  const invalidSetting = (value, min, max) => !Number.isInteger(value) || value < min || value > max;
+  if (invalidSetting(workers, 1, 32) || invalidSetting(retries, 1, 20)) {
+    setMessage('并发数需为 1–32，重试次数需为 1–20');
+    const invalid = invalidSetting(workers, 1, 32) ? workersInput : retriesInput;
+    invalid?.focus();
+    invalid?.setAttribute('aria-invalid', 'true');
+    return;
+  }
+  workersInput?.removeAttribute('aria-invalid');
+  retriesInput?.removeAttribute('aria-invalid');
   const primary = regions[0];
   const customRegion = regions.find(r => r.preset === 'custom');
 
+  lastResults = [];
+  if ($('copyQualified')) $('copyQualified').disabled = true;
+  if ($('export')) $('export').disabled = true;
   start.disabled = true;
+  start.classList.add('is-loading');
+  start.setAttribute('aria-busy', 'true');
   if (stopBtn) stopBtn.hidden = false;
-  setMessage('⏳ 正在提交…');
+  setMessage('⏳ 正在提交任务…');
   resetProgress();
 
   try {
@@ -331,6 +360,8 @@ if (start) start.onclick = async () => {
     lastJobId = d.job_id;
     batchStartTime = Date.now();
     if (elapsedLabel) { elapsedLabel.hidden = false; elapsedLabel.textContent = '0秒'; }
+    start.classList.remove('is-loading');
+    start.removeAttribute('aria-busy');
     setMessage(`已提交 ${d.total} 条，开始检测…`);
     loadHistory();
     poll();
@@ -370,15 +401,28 @@ async function retryRow(index) {
 /* ─── modal ─── */
 
 const modal = $('accountModal');
+let modalTrigger = null;
+function closeAccountModal() {
+  if (!modal || modal.hasAttribute('hidden')) return;
+  modal.classList.remove('open');
+  modal.setAttribute('hidden', '');
+  modalTrigger?.focus();
+  modalTrigger = null;
+}
 document.addEventListener('click', e => {
   const retry = e.target.closest('.retry-btn');
   if (retry) {
     const index = Number.parseInt(retry.dataset.index, 10);
-    if (Number.isInteger(index)) retryRow(index);
+    if (Number.isInteger(index)) {
+      retry.disabled = true;
+      retry.classList.add('is-loading');
+      retryRow(index).finally(() => { retry.disabled = false; retry.classList.remove('is-loading'); });
+    }
     return;
   }
   const detail = e.target.closest('.detail-btn');
   if (detail) {
+    modalTrigger = detail;
     const email = detail.dataset.email || '';
     $('modalEmail').textContent = email || '（未解析到邮箱）';
     $('modalEmail').classList.toggle('empty', !email);
@@ -386,11 +430,11 @@ document.addEventListener('click', e => {
     $('modalToken').value = detail.dataset.submitted || detail.dataset.token || '';
     modal.removeAttribute('hidden');
     modal.classList.add('open');
+    $('closeModal')?.focus();
     return;
   }
   if (e.target.closest('#closeModal') || e.target === modal) {
-    modal.classList.remove('open');
-    modal.setAttribute('hidden', '');
+    closeAccountModal();
     return;
   }
   if (e.target.closest('#copyModalAT')) {
@@ -407,6 +451,18 @@ document.addEventListener('click', e => {
     const done = () => { button.textContent = '已复制'; setTimeout(() => button.textContent = '复制', 1200); };
     if (!text) { setMessage('没有可复制的内容'); return; }
     copyText(text).then(done).catch(err => setMessage(err.message));
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && modal && !modal.hasAttribute('hidden')) {
+    e.preventDefault();
+    closeAccountModal();
+    return;
+  }
+  const row = e.target.closest?.('.history-row');
+  if (row && !e.target.closest('button') && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    if (row.dataset.jobId) openHistory(row.dataset.jobId);
   }
 });
 
@@ -558,7 +614,7 @@ function renderHistory(tasks) {
       ? '<span class="yes">已完成</span>'
       : (t.status === 'running' ? '<span class="run">进行中</span>' : `<span class="no">${esc(t.status)}</span>`);
     const finished = formatTime(t.finished_at);
-    return `<tr class="history-row" data-job-id="${esc(t.job_id)}">
+    return `<tr class="history-row" tabindex="0" role="button" aria-label="查看任务 ${esc(t.job_id.slice(0, 8))}" data-job-id="${esc(t.job_id)}">
       <td>${status}</td>
       <td>${formatTime(t.created_at)}</td>
       <td>${finished}</td>
@@ -600,6 +656,8 @@ document.addEventListener('click', e => {
     const id = del.dataset.jobId;
     if (!id) return;
     if (!confirm(`确定删除任务 ${id.slice(0, 8)}… 的历史记录吗？`)) return;
+    del.disabled = true;
+    del.classList.add('is-loading');
     fetch(`/api/gcash/batch/${encodeURIComponent(id)}`, { method: 'DELETE' })
       .then(r => r.json())
       .then(d => {
@@ -607,14 +665,20 @@ document.addEventListener('click', e => {
         setMessage(`已删除历史任务 ${id.slice(0, 8)}…`);
         loadHistory();
       })
-      .catch(err => setMessage(`❌ 删除失败：${err.message}`));
+      .catch(err => setMessage(`❌ 删除失败：${err.message}`))
+      .finally(() => { del.disabled = false; del.classList.remove('is-loading'); });
     return;
   }
   const row = e.target.closest('.history-row');
   if (row && row.dataset.jobId) openHistory(row.dataset.jobId);
 });
 
-$('refreshHistory')?.addEventListener('click', loadHistory);
+$('refreshHistory')?.addEventListener('click', async e => {
+  const button = e.currentTarget;
+  button.disabled = true;
+  button.classList.add('is-loading');
+  try { await loadHistory(); } finally { button.disabled = false; button.classList.remove('is-loading'); }
+});
 $('historyPrev')?.addEventListener('click', () => { historyPage = Math.max(0, historyPage - 1); loadHistory(); });
 $('historyNext')?.addEventListener('click', () => { historyPage += 1; loadHistory(); });
 
