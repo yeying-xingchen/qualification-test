@@ -52,7 +52,13 @@
       </div>
       <div class="table-wrap"><table><thead><tr><th>#</th><th>状态</th><th>账户详情</th><th>Checkout</th><th>币种</th><th>全部可用渠道</th><th>错误详情</th><th>操作</th></tr></thead><tbody id="results"></tbody></table></div>
     </section>
-  <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><div class="modal-account"><span class="modal-account-label">邮箱</span><strong id="modalEmail"></strong></div><label>Access Token（AT）<textarea id="modalAT" readonly></textarea><span class="modal-copy-row"><button id="copyModalAT" type="button">一键复制 AT</button><span id="modalATHint" class="field-hint"></span></span></label><label>用户提交的行<textarea id="modalToken" readonly></textarea><span class="modal-copy-row"><button id="copyModalToken" type="button">复制</button></span></label></div></div>
+
+    <section class="card" id="historyCard">
+      <div class="toolbar"><h2>历史任务</h2><div class="toolbar-actions"><button id="refreshHistory" type="button">刷新</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>状态</th><th>创建时间</th><th>完成时间</th><th>进度</th><th>有资格</th><th>失败</th><th>渠道</th><th>操作</th></tr></thead><tbody id="historyList"></tbody></table></div>
+      <div class="pagination-row"><button id="historyPrev" type="button">上一页</button><span id="historyPageInfo"></span><button id="historyNext" type="button">下一页</button></div>
+    </section>
+  <div id="accountModal" class="modal" hidden><div class="modal-panel"><button id="closeModal" class="modal-close">×</button><h2>账户详情</h2><div class="modal-account"><span class="modal-account-label">邮箱</span><strong id="modalEmail"></strong></div><div class="modal-field"><label for="modalAT">Access Token（AT）</label><textarea id="modalAT" readonly></textarea><span class="modal-copy-row"><button id="copyModalAT" type="button">一键复制 AT</button><span id="modalATHint" class="field-hint"></span></span></div><div class="modal-field"><label for="modalToken">用户提交的行</label><textarea id="modalToken" readonly></textarea><span class="modal-copy-row"><button id="copyModalToken" type="button">复制</button></span></div></div></div>
   </main>
   <script src="/static/app.js"></script>
 </body>

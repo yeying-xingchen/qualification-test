@@ -18,9 +18,26 @@
 /* Specific failure reason column: allow long error text to wrap instead of stretching the table */
 .err-col{min-width:200px;max-width:340px;overflow-wrap:anywhere;word-break:break-word}
 
-.modal-copy-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}.modal-copy-row .field-hint{font-weight:500}.modal-panel textarea#modalAT{display:block;width:100.modal-copy-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+.modal-copy-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
 .modal-copy-row .field-hint{font-weight:500}
+.modal-field{display:grid;gap:8px;margin:16px 0 0;padding-top:14px;border-top:1px solid var(--border)}
+.modal-field label{color:#d4dce7;font-weight:700;font-size:13px}
+.modal-account strong.empty{color:var(--muted);font-weight:500}
 .modal-panel textarea#modalAT{display:block;width:100%;max-width:100%;min-width:0;min-height:90px;max-height:26vh;overflow:auto;overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap}
 .modal-panel #copyModalAT{background:#263748;color:#d8e6f1;font-size:13px;padding:9px 13px}
 .modal-panel #copyModalAT:hover{filter:brightness(1.15)}
 .retry-btn{background:#263748;color:#d8e6f1;font-size:12px;padding:5px 10px;border:1px solid #3a4a5c;border-radius:6px;cursor:pointer;white-space:nowrap}.retry-btn:hover{filter:brightness(1.2)}
+
+/* Historical task list */
+.run{color:#7ab8ff}
+.history-row{cursor:pointer}
+.history-row:hover td{background:#1c2531}
+.history-row td{white-space:nowrap}
+.history-empty{color:var(--muted);text-align:center;padding:18px}
+.pagination-row{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.pagination-row button{background:#263748;color:#d8e6f1;font-size:13px;padding:7px 13px;border:1px solid #3a4a5c;border-radius:7px;cursor:pointer}
+.pagination-row button:hover:not(:disabled){filter:brightness(1.2)}
+.pagination-row button:disabled{opacity:.45;cursor:default}
+#historyPageInfo{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.history-del-btn{background:#3a2b33;color:#f1d8de;font-size:12px;padding:5px 10px;border:1px solid #5a3a45;border-radius:6px;cursor:pointer;white-space:nowrap}
+.history-del-btn:hover{filter:brightness(1.2)}

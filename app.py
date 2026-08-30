@@ -14,6 +14,7 @@ from flask import Flask, jsonify, render_template, request, session
 
 from gcash_checker import GCashCheckerError, MAX_PROXY_RETRIES, check_gcash, proxy_candidates, _is_informative_error
 from cdk_store import consume, create_cdk, redeem_cdk
+import task_store
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["JSON_AS_ASCII"] = False
@@ -57,6 +58,12 @@ threading.Thread(target=_loop.run_forever, name="gcash-asyncio", daemon=True).st
 _global_semaphore: asyncio.Semaphore | None = None
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.RLock()
+# Finish tasks that were still running when the previous process stopped so
+# they appear as completed (interrupted) history instead of hanging forever.
+try:
+    task_store.recover_running_tasks()
+except Exception:
+    app.logger.exception("failed to recover running tasks")
 
 
 def now() -> str:
@@ -70,6 +77,17 @@ def safe_result(result: Any, visitor: bool = False) -> dict[str, Any]:
         data.pop("account_email", None)
         data.pop("submitted_row", None)
     return data
+
+
+def _public_job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
+    """Return a job snapshot safe to send to the browser.
+
+    ``items`` contains the original tokens and proxies and is intentionally
+    kept only in the server-side job/store for retry support.
+    """
+    snapshot = {key: value for key, value in job.items() if key != "items"}
+    snapshot["results"] = list(job.get("results") or [])
+    return snapshot
 
 
 def _proxy_transport_error(exc: BaseException) -> bool:
@@ -151,6 +169,11 @@ def _store_row(job_id: str, index: int, row: dict[str, Any]) -> None:
         if job["completed"] >= job["total"]:
             job["status"] = "completed"
             job["finished_at"] = now()
+        try:
+            task_store.save_task(job)
+        except Exception:
+            # Persistence must not strand an otherwise healthy detection job.
+            app.logger.exception("failed to persist batch row")
 
 
 def _finalize_job(job_id: str) -> None:
@@ -170,6 +193,10 @@ def _finalize_job(job_id: str) -> None:
                 job["completed"] += 1
         job["status"] = "completed"
         job["finished_at"] = now()
+        try:
+            task_store.save_task(job)
+        except Exception:
+            app.logger.exception("failed to persist finalized batch")
 
 
 async def _run_one_multi(job_id: str, index: int, item: dict[str, Any], with_promo: bool, visitor: bool, regions: list[dict[str, Any]], retries: int | None = None) -> None:
@@ -703,6 +730,10 @@ def create_batch():
     }
     with jobs_lock:
         jobs[job_id] = job
+    try:
+        task_store.save_task(job)
+    except Exception:
+        app.logger.exception("failed to persist new batch")
     # Submit one task per item immediately. All tasks are created in the same
     # event-loop pass, so the first ``workers`` checks go out at once; as each
     # one returns, the next pending task is released instantly (sliding window).
@@ -713,15 +744,47 @@ def create_batch():
     return jsonify({"ok": True, "job_id": job_id, "total": len(items), "workers": workers, "retries": requested_retries})
 
 
+@app.get("/api/gcash/batch")
+def list_batch():
+    """List historical batch jobs (summary only, newest first)."""
+    try:
+        limit = int(request.args.get("limit", 20))
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(limit, 200))
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
+    offset = max(0, offset)
+    tasks, total = task_store.list_tasks(limit, offset)
+    return jsonify({"ok": True, "tasks": tasks, "total": total, "limit": limit, "offset": offset})
+
+
 @app.get("/api/gcash/batch/<job_id>")
 def batch_status(job_id: str):
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
+            # Hydrate from durable storage so historical tasks (e.g. after a
+            # process restart) can still be viewed and single rows retried.
+            job = task_store.get_task(job_id)
+            if job:
+                jobs[job_id] = job
+        if not job:
             return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
-        snapshot = dict(job)
-        snapshot["results"] = list(job["results"])
+        snapshot = _public_job_snapshot(job)
     return jsonify({"ok": True, **snapshot})
+
+
+@app.delete("/api/gcash/batch/<job_id>")
+def delete_batch(job_id: str):
+    """Remove a historical task from both memory and durable storage."""
+    with jobs_lock:
+        jobs.pop(job_id, None)
+    if not task_store.delete_task(job_id):
+        return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 @app.post("/api/gcash/batch/<job_id>/retry")
@@ -741,6 +804,10 @@ def retry_batch_item(job_id: str):
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
+            job = task_store.get_task(job_id)
+            if job:
+                jobs[job_id] = job
+        if not job:
             return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
         if not (0 <= index < job["total"]):
             return jsonify({"ok": False, "error": f"index 超出范围（0-{job['total'] - 1}）"}), 400
@@ -755,6 +822,10 @@ def retry_batch_item(job_id: str):
         job["results"][index] = None
         job["completed"] = max(0, job["completed"] - 1)
         job["status"] = "running"
+        try:
+            task_store.save_task(job)
+        except Exception:
+            app.logger.exception("failed to persist retry reset")
     with_promo = bool(job.get("with_promo", False))
     visitor = bool(job.get("visitor", False))
     target_channel = str(job.get("target_channel") or item.get("channel") or "gcash").lower()

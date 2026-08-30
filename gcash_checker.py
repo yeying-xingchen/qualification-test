@@ -108,18 +108,30 @@ class QualificationResult:
         }
 
 
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
 def extract_account_email(value: str) -> str:
     text = str(value or "").strip()
     parts = text.split("----")
-    if parts and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", parts[0].strip()):
+    if parts and _EMAIL_RE.fullmatch(parts[0].strip()):
         return parts[0].strip()
     token = extract_access_token(text)
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
         data = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
-        profile = data.get("https://api.openai.com/profile") or {}
-        return str(profile.get("email") or data.get("email") or "")
+        # Try profile email, then auth email, then top-level email
+        email = (
+            (data.get("https://api.openai.com/profile") or {}).get("email")
+            or (data.get("https://api.openai.com/auth") or {}).get("email")
+            or data.get("email")
+            or ""
+        )
+        email = str(email).strip()
+        # Only return strings that actually look like an email address;
+        # placeholder values like "AT" or "at" are rejected so the
+        # frontend shows the "未解析到邮箱" placeholder instead.
+        return email if _EMAIL_RE.fullmatch(email) else ""
     except Exception:
         return ""
 

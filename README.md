@@ -108,6 +108,32 @@ Content-Type: application/json
 
 `regions` 也支持 `{"gcash": {...}, "paypal_uk": {...}}` 字典形式。未传 `regions` 时保持原有单预设行为。每个结果行包含 `regions` 数组（各地区 `qualified`、`available_channels`、`checkout_session_id`、`evidence` 或 `error`），同时汇总 `available_channels`（全部地区的渠道并集）与 `channel_details`；只要任一地区目标渠道可用即视为有资格。地区失败不影响其他地区的结果。
 
+## 历史任务
+
+每个批量任务提交后会持久化到本地 SQLite（默认 `data/tasks.sqlite3`，可用 `GCASH_TASK_DB` 环境变量覆盖），页面刷新或服务重启后仍可查看历史任务。主页“历史任务”卡片按创建时间倒序列出任务摘要（状态、创建/完成时间、进度、有资格数、失败数、渠道），点击某行即载入该任务并复用现有结果表（含逐行重试）；支持分页浏览与删除记录。
+
+历史 API：
+
+```http
+GET /api/gcash/batch?limit=20&offset=0
+```
+
+返回 `{ "ok": true, "tasks": [...], "total": N, "limit": 20, "offset": 0 }`，`tasks` 为脱敏摘要（不含逐行 Token 与代理），`total` 为历史总数。
+
+```http
+GET /api/gcash/batch/<job_id>
+```
+
+返回任务完整快照（含逐行结果）。原始提交数据（Token/代理）仅保存在服务端用于重试，不会通过此接口返回。
+
+```http
+DELETE /api/gcash/batch/<job_id>
+```
+
+删除一条历史记录（同时从内存与持久化存储移除）。
+
+服务启动时会自动把上次进程遗留的“进行中”任务标记为已完成（中断）并补齐结果行，避免历史列表出现永不结束的任务。访客模式结果在持久化时同样不保存邮箱与 Access Token。
+
 ## 有资格 Token 批量操作
 
 批量检测完成后，结果区域提供两个操作：

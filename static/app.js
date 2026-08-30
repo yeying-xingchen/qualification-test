@@ -170,7 +170,7 @@ function render(data) {
       state = qc.length ? `<span class="yes">${qc.map(esc).join(', ')} 可用</span>` : `<span class="no">未发现 ${targetChannel}</span>`;
     }
     const channelText = regionChannelText(x) ?? legacyChannelText(x);
-    const detail = x.account_email
+    const detail = (x.account_email || x.access_token)
       ? `<button class="copy detail-btn" data-email="${esc(x.account_email)}" data-token="${esc(x.access_token || '')}" data-submitted="${esc(x.submitted_row || x.access_token || '')}">查看详情</button>`
       : '-';
     const err = errorText(x);
@@ -232,6 +232,7 @@ async function poll() {
     if (d.status === 'completed') {
       setMessage('✅ 批量检测完成');
       stopPolling();
+      loadHistory();
       return;
     }
     pollTimer = setTimeout(poll, 1000);
@@ -331,6 +332,7 @@ if (start) start.onclick = async () => {
     batchStartTime = Date.now();
     if (elapsedLabel) { elapsedLabel.hidden = false; elapsedLabel.textContent = '0秒'; }
     setMessage(`已提交 ${d.total} 条，开始检测…`);
+    loadHistory();
     poll();
   } catch (e) {
     setMessage(`❌ ${e.message}`);
@@ -377,7 +379,9 @@ document.addEventListener('click', e => {
   }
   const detail = e.target.closest('.detail-btn');
   if (detail) {
-    $('modalEmail').textContent = detail.dataset.email || '';
+    const email = detail.dataset.email || '';
+    $('modalEmail').textContent = email || '（未解析到邮箱）';
+    $('modalEmail').classList.toggle('empty', !email);
     $('modalAT').value = detail.dataset.token || '';
     $('modalToken').value = detail.dataset.submitted || detail.dataset.token || '';
     modal.removeAttribute('hidden');
@@ -512,3 +516,106 @@ $('export').onclick = () => {
   a.click();
   URL.revokeObjectURL(a.href);
 };
+
+/* ─── history ─── */
+
+const HISTORY_LIMIT = 20;
+let historyPage = 0, historyTotal = 0;
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return esc(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function loadHistory() {
+  const tbody = $('historyList');
+  if (!tbody) return;
+  try {
+    const r = await fetch(`/api/gcash/batch?limit=${HISTORY_LIMIT}&offset=${historyPage * HISTORY_LIMIT}`, { cache: 'no-store' });
+    const d = await r.json();
+    if (!r.ok) throw Error(d.error || '加载历史任务失败');
+    historyTotal = d.total || 0;
+    renderHistory(d.tasks || []);
+    updateHistoryPagination();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="history-empty">❌ ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderHistory(tasks) {
+  const tbody = $('historyList');
+  if (!tbody) return;
+  if (!tasks.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="history-empty">暂无历史任务</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = tasks.map(t => {
+    const progress = `${t.completed}/${t.total}`;
+    const status = t.status === 'completed'
+      ? '<span class="yes">已完成</span>'
+      : (t.status === 'running' ? '<span class="run">进行中</span>' : `<span class="no">${esc(t.status)}</span>`);
+    const finished = formatTime(t.finished_at);
+    return `<tr class="history-row" data-job-id="${esc(t.job_id)}">
+      <td>${status}</td>
+      <td>${formatTime(t.created_at)}</td>
+      <td>${finished}</td>
+      <td>${progress}</td>
+      <td>${t.qualified_count}</td>
+      <td>${t.failed_count}</td>
+      <td>${esc(t.target_channel || '-')}</td>
+      <td><button class="history-del-btn" data-job-id="${esc(t.job_id)}" type="button">删除</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function updateHistoryPagination() {
+  const info = $('historyPageInfo');
+  if (info) info.textContent = historyTotal ? `共 ${historyTotal} 条 · 第 ${historyPage + 1} 页` : '';
+  const prev = $('historyPrev'), next = $('historyNext');
+  if (prev) prev.disabled = historyPage === 0;
+  if (next) next.disabled = (historyPage + 1) * HISTORY_LIMIT >= historyTotal;
+}
+
+async function openHistory(jobId) {
+  try {
+    const r = await fetch(`/api/gcash/batch/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+    const d = await r.json();
+    if (!r.ok) throw Error(d.error || '加载任务失败');
+    stopPolling();
+    lastJobId = jobId;
+    render(d);
+    setMessage(`已载入历史任务（${jobId.slice(0, 8)}…）`);
+  } catch (e) {
+    setMessage(`❌ 载入历史任务失败：${e.message}`);
+  }
+}
+
+document.addEventListener('click', e => {
+  const del = e.target.closest('.history-del-btn');
+  if (del) {
+    e.stopPropagation();
+    const id = del.dataset.jobId;
+    if (!id) return;
+    if (!confirm(`确定删除任务 ${id.slice(0, 8)}… 的历史记录吗？`)) return;
+    fetch(`/api/gcash/batch/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) throw Error(d.error || '删除失败');
+        setMessage(`已删除历史任务 ${id.slice(0, 8)}…`);
+        loadHistory();
+      })
+      .catch(err => setMessage(`❌ 删除失败：${err.message}`));
+    return;
+  }
+  const row = e.target.closest('.history-row');
+  if (row && row.dataset.jobId) openHistory(row.dataset.jobId);
+});
+
+$('refreshHistory')?.addEventListener('click', loadHistory);
+$('historyPrev')?.addEventListener('click', () => { historyPage = Math.max(0, historyPage - 1); loadHistory(); });
+$('historyNext')?.addEventListener('click', () => { historyPage += 1; loadHistory(); });
+
+loadHistory();
